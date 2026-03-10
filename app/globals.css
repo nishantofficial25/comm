@@ -1,0 +1,268 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-border: #e2e8f0;
+
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-faint: #94a3b8;
+
+  --radius-lg: 16px;
+  --radius-full: 999px;
+
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.04);
+  --shadow-md: 0 10px 30px rgba(0,0,0,0.08);
+  --font-sans:    "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --font-display: "Instrument Serif", Georgia, serif;
+  --font-mono:    var(--font-geist-mono), "Fira Code", monospace;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.65;
+  font-weight: 400;
+  background-color: #f8fafc; /* bg-slate-50 */
+
+  background-image: radial-gradient(
+    #dbeafe 1px,
+    transparent 1px
+  );
+
+  background-size: 24px 24px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1, "ss01" 1;
+  text-rendering: optimizeLegibility;
+}
+
+/* ── Headings ──────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-sans);
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+h1 { letter-spacing: -0.035em; font-weight: 900; }
+h2 { letter-spacing: -0.03em;  }
+h3 { letter-spacing: -0.02em; }
+h4 { letter-spacing: -0.01em; }
+h5 { font-weight: 700; }
+h6 { font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }
+
+/* Display class — for hero headings, uses the serif */
+.font-display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+/* ── Paragraphs & Body Copy ────────────────────────────────── */
+p {
+  line-height: 1.7;
+}
+
+p + p { margin-top: 0.85em; }
+
+.lead {
+  font-weight: 500;
+  line-height: 1.65;
+}
+
+small, .text-fine {
+  letter-spacing: 0.01em;
+}
+
+/* ── Links ─────────────────────────────────────────────────── */
+a {
+  color: inherit;
+  text-decoration: none;
+  transition: color 0.15s ease, opacity 0.15s ease;
+}
+
+a:hover { opacity: 0.8; }
+
+/* ── Label / Overline typography ──────────────────────────── */
+.label-overline {
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.label-sm {  
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ── Numeric / Stat Display ────────────────────────────────── */
+.stat-value {
+  font-family: var(--font-sans);
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Inputs & Form Controls ────────────────────────────────── */
+input, select, textarea, button {
+  font-family: var(--font-sans);
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] { -moz-appearance: textfield; }
+
+input::placeholder,
+textarea::placeholder {
+  font-weight: 400;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+}
+
+/* ── Scrollbar (webkit) ─────────────────────────────────────── */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: #cbd5e1; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* ── Selection ─────────────────────────────────────────────── */
+::selection {
+  background: #bfdbfe;
+  color: #1e3a5f;
+}
+
+/* ── Utility Classes ───────────────────────────────────────── */
+
+/* Gradient text */
+.text-gradient-green  { background: linear-gradient(135deg, #16a34a, #4ade80); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.text-gradient-orange { background: linear-gradient(135deg, #ea580c, #fb923c); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.text-gradient-blue   { background: linear-gradient(135deg, #1d4ed8, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.text-gradient-purple { background: linear-gradient(135deg, #6d28d9, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+
+/* Card surface */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.card-hover {
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.card-hover:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+/* Badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  line-height: 1;
+  border: 1px solid transparent;
+}
+
+/* Animate spin (for Loader icons) */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.animate-spin { animation: spin 0.7s linear infinite; }
+
+/* Progress bar shimmer */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.progress-shimmer {
+  background: linear-gradient(
+    90deg,
+    #e2e8f0 25%,
+    #f1f5f9 50%,
+    #e2e8f0 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+
+/* Drag-over pulse */
+@keyframes pulse-border {
+  0%, 100% { border-color: #86efac; }
+  50%       { border-color: #4ade80; }
+}
+.drag-active { animation: pulse-border 1s ease infinite; }
+
+/* Drop-in for modals / dropdowns */
+@keyframes dropIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    }
+}
+.animate-drop-in { animation: dropIn 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* Fade-up for sections */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+.animate-fade-up { animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+/* ── Focus Ring ─────────────────────────────────────────────── */
+.focus-ring:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ── Page-level Max Width ───────────────────────────────────── */
+.page-container {
+  max-width: 680px;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+/* ── Prose (FAQ answers etc.) ──────────────────────────────── */
+.prose p  { font-size: 0.875rem; line-height: 1.75; color: var(--color-text-secondary); }
+.prose h3 { font-size: 0.9375rem; font-weight: 700; color: #334155; margin-bottom: 0.3em; }
+
+/* ── Print ──────────────────────────────────────────────────── */
+@media print {
+  body { background: white; }
+  header, footer { display: none; }
+}
+
