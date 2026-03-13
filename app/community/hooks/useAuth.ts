@@ -25,6 +25,10 @@ export function getToken(): string | null {
 }
 export function setToken(t: string) {
   localStorage.setItem("sv_token", t);
+  // Broadcast to all other tabs: a new login happened → they should log out
+  try {
+    localStorage.setItem("sv_login_event", Date.now().toString());
+  } catch {}
 }
 export function clearToken() {
   localStorage.removeItem("sv_token");
@@ -61,17 +65,46 @@ export function useAuth() {
 
   useEffect(() => {
     fetchMe();
-    // Listen for login/logout events
+
+    // Listen for login/logout events dispatched within the same tab
     const handler = () => fetchMe();
     window.addEventListener("sv_auth_change", handler);
-    return () => window.removeEventListener("sv_auth_change", handler);
+
+    // Listen for login events from OTHER tabs via localStorage
+    // When another tab logs in, sv_login_event changes → force logout here
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "sv_login_event") {
+        // Another tab just logged in — log out this tab immediately
+        clearToken();
+        // Also stop any running timer to prevent phantom time
+        localStorage.removeItem("sv_running_timer");
+        setState({ user: null, loading: false, error: null });
+        window.dispatchEvent(new Event("sv_auth_change"));
+        window.dispatchEvent(new Event("sv_timer_stopped"));
+        window.dispatchEvent(new Event("sv_force_logout"));
+      }
+      if (e.key === "sv_token" && !e.newValue) {
+        // Token was cleared in another tab (logout)
+        setState({ user: null, loading: false, error: null });
+        localStorage.removeItem("sv_running_timer");
+        window.dispatchEvent(new Event("sv_timer_stopped"));
+      }
+    };
+    window.addEventListener("storage", onStorage);
+
+    return () => {
+      window.removeEventListener("sv_auth_change", handler);
+      window.removeEventListener("storage", onStorage);
+    };
   }, [fetchMe]);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     clearToken();
+    localStorage.removeItem("sv_running_timer");
     setState({ user: null, loading: false, error: null });
     window.dispatchEvent(new Event("sv_auth_change"));
-  };
+    window.dispatchEvent(new Event("sv_timer_stopped"));
+  }, []);
 
   const updateProfile = async (displayName: string) => {
     const token = getToken();

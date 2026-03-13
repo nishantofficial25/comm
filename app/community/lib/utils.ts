@@ -1,7 +1,18 @@
 // ─── Constants ────────────────────────────────────────────────────────────────
 export const API = "https://api.hindanbazar.cloud";
 
-export const TODAY = new Date().toISOString().split("T")[0];
+// ⚠️  Do NOT use a module-level TODAY constant — it would be frozen at the time
+// the module first loaded (could be yesterday if the tab stayed open overnight).
+// Always call dateKey() at the point of use instead.
+export function dateKey(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().split("T")[0];
+}
+
+// Kept for backwards-compat with files that still import TODAY, but NOW it's
+// a getter so it always returns the real current date.
+export const TODAY = dateKey(0); // used only at module load for non-timer display
 
 export const COLORS = [
   "#a855f7",
@@ -77,11 +88,6 @@ export function pad(n: number) {
 }
 export function fmtHrs(s: number) {
   return (s / 3600).toFixed(1) + "h";
-}
-export function dateKey(offsetDays = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
-  return d.toISOString().split("T")[0];
 }
 
 export function lsGet<T>(key: string, def: T): T {

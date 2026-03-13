@@ -1,22 +1,17 @@
 "use client";
 /**
  * TrackerTab — Professional Study Analysis Dashboard
- * Sections: Overview · Deep Analysis · Subjects · Tasks
+ *
+ * KEY RULES:
+ *  - NO manual topic/subject add. All subjects come from TodoLists (sv_todo_lists).
+ *  - Every time figure shown is derived from task.studiedSecs (the server-confirmed
+ *    source of truth). No re-computation from timer state here.
+ *  - Pomodoro focus time (sv_pomo_today_*) shown as "🍅 Pomodoro / Misc" in Subjects.
+ *  - Sections: Overview · Analysis · Subjects (pie charts) · Tasks
  */
-import { useState, useEffect, useCallback, useMemo } from "react";
-import {
-  API,
-  authFetch,
-  fmtSecs,
-  fmtHrs,
-  lsGet,
-  lsSet,
-  dateKey,
-  COLORS,
-} from "../lib/utils";
-import { TrackerTopic, TodoList } from "../lib/utils";
-
-const TODAY = dateKey(0);
+import { useState, useMemo } from "react";
+import { fmtSecs, fmtHrs, lsGet, dateKey, COLORS } from "../lib/utils";
+import { TodoList, TodoItem } from "../lib/utils";
 
 /* ══════════════════════ TYPES ══════════════════════ */
 interface DayData {
@@ -28,7 +23,7 @@ interface DayData {
   weekday: number;
 }
 
-/* ══════════════════════ HELPERS ══════════════════════ */
+/* ══════════════════════ ANALYTICS HELPERS ══════════════════════ */
 function getDailyData(days = 90): DayData[] {
   return Array.from({ length: days }).map((_, i) => {
     const offset = -(days - 1 - i);
@@ -44,7 +39,7 @@ function getDailyData(days = 90): DayData[] {
       }),
       shortLabel: d.toLocaleDateString("en", { weekday: "short" }),
       secs: lsGet<number>("sv_daily_" + k, 0),
-      isToday: k === TODAY,
+      isToday: k === dateKey(0),
       weekday: d.getDay(),
     };
   });
@@ -91,25 +86,7 @@ function getWeekdayAvgs(
   }));
 }
 
-function getTimeDistribution(daily: DayData[]) {
-  const buckets = [
-    { label: "< 1h", min: 0, max: 3600, count: 0, color: "#f3f4f6" },
-    { label: "1–2h", min: 3600, max: 7200, count: 0, color: "#c4b5fd" },
-    { label: "2–4h", min: 7200, max: 14400, count: 0, color: "#a78bfa" },
-    { label: "4–6h", min: 14400, max: 21600, count: 0, color: "#8b5cf6" },
-    { label: "6–8h", min: 21600, max: 28800, count: 0, color: "#7c3aed" },
-    { label: "> 8h", min: 28800, max: Infinity, count: 0, color: "#5b21b6" },
-  ];
-  for (const d of daily) {
-    if (d.isToday) continue;
-    const b = buckets.find((b) => d.secs >= b.min && d.secs < b.max);
-    if (b) b.count++;
-  }
-  return buckets;
-}
-
 function getStudyVelocity(daily: DayData[], windowDays = 7) {
-  // rolling 7-day average over last 30 days
   const points: { label: string; avg: number }[] = [];
   for (let i = windowDays; i <= 30; i++) {
     const slice = daily.slice(
@@ -123,12 +100,8 @@ function getStudyVelocity(daily: DayData[], windowDays = 7) {
   return points;
 }
 
-function fmtGoalPct(secs: number, goalSecs: number) {
-  if (goalSecs === 0) return "—";
-  return Math.round((secs / goalSecs) * 100) + "%";
-}
-
-/* ══════════════════════ SUB-COMPONENTS ══════════════════════ */
+/* ══════════════════════ UI PRIMITIVES ══════════════════════ */
+const AC = "#8b5cf6";
 
 function StatCard({
   label,
@@ -276,7 +249,6 @@ function Card({
   );
 }
 
-/* Bar chart */
 function BarChart({
   data,
   height = 96,
@@ -379,9 +351,9 @@ function BarChart({
   );
 }
 
-/* Heatmap */
 function HeatMap({ accentColor }: { accentColor: string }) {
   const WEEKS = 15;
+  const TODAY = dateKey(0);
   const cells: { key: string; secs: number; label: string }[] = [];
   for (let i = WEEKS * 7 - 1; i >= 0; i--) {
     const k = dateKey(-i);
@@ -481,79 +453,119 @@ function HeatMap({ accentColor }: { accentColor: string }) {
   );
 }
 
-/* Donut */
-function DonutChart({
+function PieChart({
   slices,
-  size = 120,
+  size = 180,
   center,
 }: {
-  slices: { color: string; pct: number }[];
+  slices: { color: string; pct: number; label: string; value: string }[];
   size?: number;
   center?: React.ReactNode;
 }) {
-  const r = size / 2 - 12;
-  const circ = 2 * Math.PI * r;
-  let cum = 0;
+  const [hov, setHov] = useState<number | null>(null);
+  const r = size / 2 - 16;
+  const cx = size / 2,
+    cy = size / 2;
+  let cum = -90;
+  const arcs = slices.map((s, i) => {
+    const deg = (s.pct / 100) * 360;
+    const start = cum;
+    cum += deg;
+    const end = cum;
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const sx = cx + r * Math.cos(toRad(start)),
+      sy = cy + r * Math.sin(toRad(start));
+    const ex = cx + r * Math.cos(toRad(end)),
+      ey = cy + r * Math.sin(toRad(end));
+    const large = deg > 180 ? 1 : 0;
+    const ri = r * 0.55;
+    const ix = cx + ri * Math.cos(toRad(start)),
+      iy = cy + ri * Math.sin(toRad(start));
+    const iex = cx + ri * Math.cos(toRad(end)),
+      iey = cy + ri * Math.sin(toRad(end));
+    return {
+      path: `M ${sx} ${sy} A ${r} ${r} 0 ${large} 1 ${ex} ${ey} L ${iex} ${iey} A ${ri} ${ri} 0 ${large} 0 ${ix} ${iy} Z`,
+      ...s,
+      i,
+    };
+  });
   return (
     <div
       style={{ position: "relative", width: size, height: size, flexShrink: 0 }}
     >
-      <svg
-        width={size}
-        height={size}
-        viewBox={`0 0 ${size} ${size}`}
-        style={{ transform: "rotate(-90deg)" }}
-      >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         {slices.length === 0 ? (
           <circle
-            cx={size / 2}
-            cy={size / 2}
+            cx={cx}
+            cy={cy}
             r={r}
             fill="none"
             stroke="#f3f4f6"
-            strokeWidth={10}
+            strokeWidth={r * 0.45}
           />
         ) : (
-          slices.map((s, i) => {
-            const dash = (s.pct / 100) * circ;
-            const offset = circ - (cum / 100) * circ;
-            cum += s.pct;
-            return (
-              <circle
-                key={i}
-                cx={size / 2}
-                cy={size / 2}
-                r={r}
-                fill="none"
-                stroke={s.color}
-                strokeWidth={10}
-                strokeDasharray={`${dash} ${circ - dash}`}
-                strokeDashoffset={offset}
-                strokeLinecap="butt"
-              />
-            );
-          })
+          arcs.map((arc) => (
+            <path
+              key={arc.i}
+              d={arc.path}
+              fill={arc.color}
+              opacity={hov === null ? 1 : hov === arc.i ? 1 : 0.45}
+              stroke="white"
+              strokeWidth={2}
+              style={{
+                cursor: "pointer",
+                transition: "opacity 0.15s",
+                transform: hov === arc.i ? `scale(1.04)` : "scale(1)",
+                transformOrigin: `${cx}px ${cy}px`,
+              }}
+              onMouseEnter={() => setHov(arc.i)}
+              onMouseLeave={() => setHov(null)}
+            />
+          ))
         )}
       </svg>
-      {center && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          {center}
-        </div>
-      )}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          pointerEvents: "none",
+        }}
+      >
+        {hov !== null && slices[hov] ? (
+          <>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 800,
+                color: slices[hov].color,
+                textAlign: "center",
+                maxWidth: r * 1.1,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {slices[hov].label}
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#374151" }}>
+              {slices[hov].value}
+            </div>
+            <div style={{ fontSize: 10, color: "#9ca3af" }}>
+              {slices[hov].pct.toFixed(1)}%
+            </div>
+          </>
+        ) : (
+          center
+        )}
+      </div>
     </div>
   );
 }
 
-/* Weekday heatmap */
 function WeekdayBars({
   data,
   accentColor,
@@ -633,7 +645,6 @@ function WeekdayBars({
   );
 }
 
-/* Velocity sparkline */
 function SparkLine({
   points,
   color,
@@ -667,7 +678,6 @@ function SparkLine({
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      {/* Last point dot */}
       {points.length > 0 && (
         <circle
           cx={xs[xs.length - 1]}
@@ -680,100 +690,182 @@ function SparkLine({
   );
 }
 
-/* ══════════════════════ MAIN ══════════════════════ */
-let syncTimer: ReturnType<typeof setTimeout> | null = null;
-function scheduleSync(topics: TrackerTopic[], date: string) {
-  if (syncTimer) clearTimeout(syncTimer);
-  syncTimer = setTimeout(() => {
-    authFetch(`${API}/api/void/study/sync`, {
-      method: "POST",
-      body: JSON.stringify({ topics: { [date]: topics } }),
-    }).catch(() => {});
-  }, 1500);
+function TaskRow({
+  task,
+  listColor,
+  listName,
+}: {
+  task: TodoItem;
+  listColor: string;
+  listName: string;
+}) {
+  const secs = task.studiedSecs || 0;
+  const assignedSecs = (task.assignedMins || 0) * 60;
+  const pct =
+    assignedSecs > 0
+      ? Math.min(Math.round((secs / assignedSecs) * 100), 100)
+      : null;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 14px",
+        background: "white",
+        border: `1.5px solid ${task.done ? "#f3f4f6" : "#e5e7eb"}`,
+        borderRadius: 13,
+        opacity: task.done ? 0.6 : 1,
+      }}
+    >
+      <div
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          background: listColor,
+          flexShrink: 0,
+        }}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: task.done ? "#9ca3af" : "#111827",
+            textDecoration: task.done ? "line-through" : "none",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {task.text}
+        </div>
+        <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>
+          {listName}
+          {task.assignedMins ? ` · ${task.assignedMins}m target` : ""}
+        </div>
+      </div>
+      {secs > 0 && (
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 800,
+            color: listColor,
+            flexShrink: 0,
+            fontFamily: "'Space Grotesk', sans-serif",
+          }}
+        >
+          {fmtSecs(secs)}
+        </div>
+      )}
+      {pct !== null && (
+        <div
+          style={{ width: 36, height: 36, flexShrink: 0, position: "relative" }}
+        >
+          <svg
+            viewBox="0 0 36 36"
+            style={{ transform: "rotate(-90deg)", width: 36, height: 36 }}
+          >
+            <circle
+              cx="18"
+              cy="18"
+              r="14"
+              fill="none"
+              stroke="#f3f4f6"
+              strokeWidth="3"
+            />
+            <circle
+              cx="18"
+              cy="18"
+              r="14"
+              fill="none"
+              stroke={pct >= 100 ? "#22c55e" : listColor}
+              strokeWidth="3"
+              strokeDasharray={`${(pct / 100) * 87.96} 87.96`}
+              strokeLinecap="round"
+            />
+          </svg>
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 8,
+              fontWeight: 800,
+              color: pct >= 100 ? "#22c55e" : listColor,
+            }}
+          >
+            {pct}%
+          </div>
+        </div>
+      )}
+      <div
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: 5,
+          background: task.done ? "#22c55e18" : "#f3f4f6",
+          border: `1.5px solid ${task.done ? "#22c55e55" : "#e5e7eb"}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 10,
+          color: task.done ? "#22c55e" : "#d1d5db",
+          flexShrink: 0,
+        }}
+      >
+        {task.done ? "✓" : ""}
+      </div>
+    </div>
+  );
 }
 
+/* ══════════════════════ MAIN ══════════════════════ */
 interface Props {
   onStudyTime: (secs: number) => void;
-  initialTopics?: TrackerTopic[];
+  initialTopics?: never;
 }
 
 type Section = "overview" | "analysis" | "subjects" | "tasks";
 
-export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
-  const [topics, setTopics] = useState<TrackerTopic[]>(
-    () => initialTopics ?? lsGet("sv_topics_" + TODAY, []),
-  );
-  const [newTopic, setNewTopic] = useState("");
-  const [newTopicColor, setNewTopicColor] = useState(COLORS[0]);
-  const [activeTimer, setActiveTimer] = useState<{
-    id: string;
-    start: number;
-  } | null>(null);
-  const [liveElapsed, setLiveElapsed] = useState<Record<string, number>>({});
+export default function TrackerTab({ onStudyTime }: Props) {
+  const TODAY = dateKey(0);
   const [chartRange, setChartRange] = useState<7 | 14 | 30>(30);
   const [section, setSection] = useState<Section>("overview");
+  const [taskFilter, setTaskFilter] = useState<
+    "all" | "done" | "active" | "studied"
+  >("all");
+  const [taskSort, setTaskSort] = useState<"time" | "name" | "list">("time");
+  const [expandedList, setExpandedList] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (initialTopics?.length) {
-      setTopics(initialTopics);
-      lsSet("sv_topics_" + TODAY, initialTopics);
-    }
-  }, []); // eslint-disable-line
+  const todoLists: TodoList[] = lsGet("sv_todo_lists", []);
+  const allTasks: (TodoItem & {
+    listName: string;
+    listColor: string;
+    listId: string;
+  })[] = todoLists.flatMap((l) =>
+    l.items.map((t) => ({
+      ...t,
+      listName: l.name,
+      listColor: l.color,
+      listId: l.id,
+    })),
+  );
 
-  useEffect(() => {
-    if (!activeTimer) return;
-    const iv = setInterval(
-      () =>
-        setLiveElapsed((p) => ({
-          ...p,
-          [activeTimer.id]: Math.floor((Date.now() - activeTimer.start) / 1000),
-        })),
-      1000,
-    );
-    return () => clearInterval(iv);
-  }, [activeTimer]);
-
-  const saveTopics = useCallback((t: TrackerTopic[]) => {
-    setTopics(t);
-    lsSet("sv_topics_" + TODAY, t);
-    scheduleSync(t, TODAY);
-  }, []);
-
-  const stopTimer = useCallback(() => {
-    if (!activeTimer) return;
-    const e = Math.floor((Date.now() - activeTimer.start) / 1000);
-    const updated = topics.map((t) =>
-      t.id === activeTimer.id ? { ...t, secs: t.secs + e } : t,
-    );
-    saveTopics(updated);
-    onStudyTime(e);
-    setLiveElapsed((p) => ({ ...p, [activeTimer.id]: 0 }));
-    setActiveTimer(null);
-  }, [activeTimer, topics, saveTopics, onStudyTime]);
-
-  const addTopic = () => {
-    if (!newTopic.trim()) return;
-    const col = newTopicColor || COLORS[topics.length % COLORS.length];
-    saveTopics([
-      ...topics,
-      { id: Date.now() + "", name: newTopic.trim(), color: col, secs: 0 },
-    ]);
-    setNewTopic("");
-    setNewTopicColor(COLORS[(topics.length + 1) % COLORS.length]);
-  };
-
-  /* ── Analytics ── */
   const daily90 = useMemo(() => getDailyData(90), []);
   const daily30 = useMemo(() => daily90.slice(-30), [daily90]);
   const dailyN = useMemo(() => getDailyData(chartRange), [chartRange]);
 
-  const totalLifetime = useMemo(
-    () =>
-      Object.keys(localStorage)
-        .filter((k) => k.startsWith("sv_daily_"))
-        .reduce((a, k) => a + lsGet<number>(k, 0), 0),
-    [],
-  );
+  const totalLifetime = useMemo(() => {
+    if (typeof window === "undefined") return 0;
+    return Object.keys(localStorage)
+      .filter((k) => k.startsWith("sv_daily_"))
+      .reduce((a, k) => a + lsGet<number>(k, 0), 0);
+  }, []);
+
   const todaySecs = lsGet<number>("sv_daily_" + TODAY, 0);
   const weekSecs = daily30.slice(-7).reduce((a, d) => a + d.secs, 0);
   const prevWeekSecs = daily30.slice(-14, -7).reduce((a, d) => a + d.secs, 0);
@@ -811,52 +903,118 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
     .filter((d) => d.count > 0)
     .reduce((a, d) => (d.avg < a.avg ? d : a), weekdayAvgs[0]);
   const velocity = useMemo(() => getStudyVelocity(daily90), [daily90]);
-  const timeDist = useMemo(() => getTimeDistribution(daily90), [daily90]);
 
-  // Session count estimate (each day studied = ~1 session avg 2h)
   const sessionCount = daily90.filter((d) => d.secs > 0).length;
   const avgSession =
     sessionCount > 0
       ? Math.round(daily90.reduce((a, d) => a + d.secs, 0) / sessionCount)
       : 0;
 
-  // Subject breakdown
-  const totalTopicSecs = topics.reduce((a, t) => a + t.secs, 0);
-  const topicSlices = topics.map((t) => ({
-    color: t.color,
-    pct: totalTopicSecs > 0 ? (t.secs / totalTopicSecs) * 100 : 0,
+  /* ── Pomodoro lifetime total (all sv_pomo_today_* keys) ── */
+  const pomoLifetimeSecs = useMemo(() => {
+    if (typeof window === "undefined") return 0;
+    return Object.keys(localStorage)
+      .filter((k) => k.startsWith("sv_pomo_today_"))
+      .reduce((a, k) => a + lsGet<number>(k, 0), 0);
+  }, []);
+
+  const pomoTodaySecs = lsGet<number>("sv_pomo_today_" + TODAY, 0);
+
+  /* ── Subject (list-based) time breakdown ── */
+  const listSummaries = todoLists
+    .map((l, li) => {
+      const studied = l.items.reduce((a, t) => a + (t.studiedSecs || 0), 0);
+      const done = l.items.filter((t) => t.done).length;
+      const overdue = l.items.filter(
+        (t) => !t.done && t.createdAt?.slice(0, 10) < TODAY,
+      ).length;
+      return {
+        ...l,
+        studied,
+        done,
+        overdue,
+        color: l.color || COLORS[li % COLORS.length],
+      };
+    })
+    .filter((l) => l.items.length > 0 || l.studied > 0);
+
+  /* ── Add Pomodoro / Miscellaneous entry if there's any pomo time ── */
+  const POMO_MISC_COLOR = "#f59e0b";
+  const pomoMiscEntry =
+    pomoLifetimeSecs > 0
+      ? {
+          id: "__pomo_misc__",
+          name: "Pomodoro / Miscellaneous",
+          color: POMO_MISC_COLOR,
+          studied: pomoLifetimeSecs,
+          done: 0,
+          overdue: 0,
+          items: [],
+        }
+      : null;
+
+  const allListSummaries = pomoMiscEntry
+    ? [...listSummaries, pomoMiscEntry]
+    : listSummaries;
+
+  const totalStudiedInLists = allListSummaries.reduce(
+    (a, l) => a + l.studied,
+    0,
+  );
+  const listSlices = allListSummaries.map((l) => ({
+    color: l.color,
+    pct: totalStudiedInLists > 0 ? (l.studied / totalStudiedInLists) * 100 : 0,
+    label: l.name,
+    value: fmtHrs(l.studied),
   }));
 
-  // Task data
-  const todoLists: TodoList[] = lsGet("sv_todo_lists", []);
-  const allTasks = todoLists.flatMap((l) => l.items);
+  const studiedTasks = allTasks.filter((t) => (t.studiedSecs || 0) > 0);
+  const totalTaskStudied = studiedTasks.reduce(
+    (a, t) => a + (t.studiedSecs || 0),
+    0,
+  );
+  const taskSlices = studiedTasks
+    .sort((a, b) => (b.studiedSecs || 0) - (a.studiedSecs || 0))
+    .slice(0, 8)
+    .map((t) => ({
+      color: t.listColor,
+      pct:
+        totalTaskStudied > 0
+          ? ((t.studiedSecs || 0) / totalTaskStudied) * 100
+          : 0,
+      label: t.text,
+      value: fmtSecs(t.studiedSecs || 0),
+    }));
+
   const doneTasks = allTasks.filter((t) => t.done);
-  const taskStudied = allTasks.reduce((a, t) => a + (t.studiedSecs || 0), 0);
+  const pendingTasks = allTasks.filter((t) => !t.done);
+  const overdueTasks = allTasks.filter(
+    (t) => !t.done && t.createdAt?.slice(0, 10) < TODAY,
+  );
   const completionRate =
     allTasks.length > 0
       ? Math.round((doneTasks.length / allTasks.length) * 100)
       : 0;
-  const pendingTasks = allTasks.filter((t) => !t.done);
-  const overdueTasks = allTasks.filter(
-    (t) => !t.done && t.createdAt && t.createdAt.slice(0, 10) < TODAY,
-  );
-
-  // Estimated completion (if same avg pace)
   const totalAssigned = allTasks.reduce(
     (a, t) => a + (t.assignedMins || 0) * 60,
     0,
   );
-  const totalStudiedOnTasks = allTasks.reduce(
-    (a, t) => a + (t.studiedSecs || 0),
-    0,
-  );
-  const remainingStudy = Math.max(0, totalAssigned - totalStudiedOnTasks);
-  const estDaysToComplete =
-    avgDaily > 0 && remainingStudy > 0
-      ? Math.ceil(remainingStudy / avgDaily)
-      : null;
+  const remainingStudy = Math.max(0, totalAssigned - totalTaskStudied);
 
-  const AC = "#8b5cf6";
+  const filteredTasks = allTasks
+    .filter((t) => {
+      if (taskFilter === "done") return t.done;
+      if (taskFilter === "active") return !t.done;
+      if (taskFilter === "studied") return (t.studiedSecs || 0) > 0;
+      return true;
+    })
+    .sort((a, b) => {
+      if (taskSort === "time")
+        return (b.studiedSecs || 0) - (a.studiedSecs || 0);
+      if (taskSort === "name") return a.text.localeCompare(b.text);
+      if (taskSort === "list") return a.listName.localeCompare(b.listName);
+      return 0;
+    });
 
   const SECTIONS: { key: Section; icon: string; label: string }[] = [
     { key: "overview", icon: "⚡", label: "Overview" },
@@ -873,6 +1031,7 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
       <style>{`
         @keyframes trFadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
         .tr-sec { animation: trFadeIn 0.22s ease; }
+        .tr-pill { transition: all 0.15s; }
         .tr-pill:hover { opacity: 0.85; }
       `}</style>
 
@@ -894,7 +1053,6 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
               background: section === key ? AC : "#f3f4f6",
               border: "none",
               color: section === key ? "white" : "#6b7280",
-              transition: "all 0.15s",
               display: "flex",
               alignItems: "center",
               gap: 5,
@@ -906,10 +1064,9 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
         ))}
       </div>
 
-      {/* ═══════════ OVERVIEW ═══════════ */}
+      {/* ════════════════ OVERVIEW ════════════════ */}
       {section === "overview" && (
         <div className="tr-sec">
-          {/* Today progress */}
           <Card style={{ marginBottom: 16 }}>
             <div
               style={{
@@ -976,7 +1133,44 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             )}
           </Card>
 
-          {/* 2x2 stat grid */}
+          {/* Pomodoro today banner if any */}
+          {pomoTodaySecs > 0 && (
+            <div
+              style={{
+                background: "linear-gradient(135deg,#fffbeb,#fef3c7)",
+                border: "1.5px solid #fde68a",
+                borderRadius: 14,
+                padding: "12px 16px",
+                marginBottom: 14,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              <span style={{ fontSize: 20 }}>🍅</span>
+              <div style={{ flex: 1 }}>
+                <div
+                  style={{ fontSize: 13, fontWeight: 800, color: "#92400e" }}
+                >
+                  Pomodoro Focus Today
+                </div>
+                <div style={{ fontSize: 11, color: "#b45309" }}>
+                  Untracked task time from Pomodoro sessions
+                </div>
+              </div>
+              <div
+                style={{
+                  fontFamily: "'Space Grotesk', sans-serif",
+                  fontSize: 18,
+                  fontWeight: 900,
+                  color: "#d97706",
+                }}
+              >
+                {fmtHrs(pomoTodaySecs)}
+              </div>
+            </div>
+          )}
+
           <div
             style={{
               display: "grid",
@@ -1052,7 +1246,6 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             />
           </div>
 
-          {/* Chart */}
           <Card style={{ marginBottom: 16 }}>
             <div
               style={{
@@ -1087,7 +1280,6 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             <BarChart data={dailyN} height={90} accentColor={AC} />
           </Card>
 
-          {/* Heatmap */}
           <Card>
             <SectionHead title="Study Heatmap" sub="Last 15 weeks" />
             <div style={{ overflowX: "auto", paddingBottom: 4 }}>
@@ -1097,10 +1289,9 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
         </div>
       )}
 
-      {/* ═══════════ DEEP ANALYSIS ═══════════ */}
+      {/* ════════════════ ANALYSIS ════════════════ */}
       {section === "analysis" && (
         <div className="tr-sec">
-          {/* Summary row */}
           <div
             style={{
               display: "grid",
@@ -1135,7 +1326,6 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             />
           </div>
 
-          {/* Study velocity */}
           <Card style={{ marginBottom: 16 }}>
             <SectionHead
               title="Study Velocity"
@@ -1175,7 +1365,6 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             )}
           </Card>
 
-          {/* Weekday pattern */}
           <Card style={{ marginBottom: 16 }}>
             <SectionHead
               title="Weekday Patterns"
@@ -1200,7 +1389,7 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
                     fontSize: 12,
                   }}
                 >
-                  <span style={{ color: "#9ca3af" }}>Best day: </span>
+                  <span style={{ color: "#9ca3af" }}>Best: </span>
                   <span style={{ fontWeight: 800, color: "#16a34a" }}>
                     {bestWeekday.label} · {fmtHrs(bestWeekday.avg)}
                   </span>
@@ -1225,70 +1414,6 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             )}
           </Card>
 
-          {/* Time distribution */}
-          <Card style={{ marginBottom: 16 }}>
-            <SectionHead
-              title="Session Length Distribution"
-              sub="How often you hit each study range"
-            />
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {timeDist.map((b) => {
-                const total = timeDist.reduce((a, x) => a + x.count, 0);
-                const pct = total > 0 ? Math.round((b.count / total) * 100) : 0;
-                return (
-                  <div key={b.label}>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        marginBottom: 4,
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: 12,
-                          fontWeight: 700,
-                          color: "#374151",
-                        }}
-                      >
-                        {b.label}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: 12,
-                          fontWeight: 800,
-                          color: b.count > 0 ? "#7c3aed" : "#d1d5db",
-                        }}
-                      >
-                        {b.count} day{b.count !== 1 ? "s" : ""} · {pct}%
-                      </span>
-                    </div>
-                    <div
-                      style={{
-                        height: 6,
-                        background: "#f3f4f6",
-                        borderRadius: 99,
-                        overflow: "hidden",
-                      }}
-                    >
-                      <div
-                        style={{
-                          height: "100%",
-                          width: `${pct}%`,
-                          background:
-                            b.color === "#f3f4f6" ? "#e5e7eb" : b.color,
-                          borderRadius: 99,
-                          transition: "width 0.5s",
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-
-          {/* Goal adherence */}
           <Card>
             <div
               style={{
@@ -1373,179 +1498,321 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
                 color: "#9ca3af",
               }}
             >
-              <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
+              {[
+                ["#22c55e", "Goal"],
+                [AC, "≥80%"],
+                [AC + "55", "<80%"],
+                ["#f3f4f6", "None"],
+              ].map(([col, lbl]) => (
                 <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 1,
-                    background: "#22c55e",
-                    display: "inline-block",
-                  }}
-                />
-                Goal
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 1,
-                    background: AC,
-                    display: "inline-block",
-                  }}
-                />
-                ≥80%
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 1,
-                    background: AC + "55",
-                    display: "inline-block",
-                  }}
-                />
-                &lt;80%
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 1,
-                    background: "#f3f4f6",
-                    display: "inline-block",
-                  }}
-                />
-                None
-              </span>
+                  key={lbl}
+                  style={{ display: "flex", alignItems: "center", gap: 3 }}
+                >
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: 1,
+                      background: col,
+                      display: "inline-block",
+                    }}
+                  />
+                  {lbl}
+                </span>
+              ))}
             </div>
           </Card>
         </div>
       )}
 
-      {/* ═══════════ SUBJECTS ═══════════ */}
+      {/* ════════════════ SUBJECTS ════════════════ */}
       {section === "subjects" && (
         <div className="tr-sec">
-          {/* Add subject */}
-          <Card style={{ marginBottom: 18, border: "1.5px solid #ede9fe" }}>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 800,
-                color: AC,
-                letterSpacing: "0.1em",
-                marginBottom: 10,
-              }}
-            >
-              TRACK A SUBJECT
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <input
-                value={newTopic}
-                onChange={(e) => setNewTopic(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addTopic()}
-                placeholder="e.g. Physics, Calculus, History…"
-                style={{
-                  flex: 1,
-                  minWidth: 120,
-                  background: "#faf9ff",
-                  border: "1.5px solid #ede9fe",
-                  borderRadius: 11,
-                  padding: "10px 14px",
-                  color: "#111827",
-                  fontSize: 13,
-                  outline: "none",
-                }}
-                onFocus={(e) => (e.target.style.borderColor = AC)}
-                onBlur={(e) => (e.target.style.borderColor = "#ede9fe")}
-              />
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                {COLORS.map((col) => (
-                  <button
-                    key={col}
-                    onClick={() => setNewTopicColor(col)}
-                    style={{
-                      width: 18,
-                      height: 18,
-                      borderRadius: "50%",
-                      background: col,
-                      border: "none",
-                      cursor: "pointer",
-                      outline:
-                        newTopicColor === col ? `2.5px solid ${col}` : "none",
-                      outlineOffset: 2,
-                    }}
-                  />
-                ))}
+          {allListSummaries.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "80px 0" }}>
+              <div style={{ fontSize: 44, marginBottom: 16 }}>◎</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#6b7280" }}>
+                No lists with data yet
               </div>
-              <button
-                onClick={addTopic}
-                style={{
-                  padding: "10px 18px",
-                  background: AC,
-                  border: "none",
-                  borderRadius: 11,
-                  color: "white",
-                  fontWeight: 700,
-                  fontSize: 13,
-                  cursor: "pointer",
-                  boxShadow: `0 4px 14px ${AC}44`,
-                }}
-              >
-                + Add
-              </button>
+              <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 6 }}>
+                Create lists and run timers in the Todo tab to see your subject
+                breakdown here.
+              </div>
             </div>
-          </Card>
-
-          {topics.length > 0 ? (
+          ) : (
             <>
-              {/* Donut summary */}
-              <Card style={{ marginBottom: 14 }}>
-                <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-                  <DonutChart
-                    slices={topicSlices}
-                    size={110}
-                    center={
-                      <>
-                        <div
-                          style={{
-                            fontFamily: "'Space Grotesk', sans-serif",
-                            fontSize: 13,
-                            fontWeight: 800,
-                            color: "#111827",
-                          }}
-                        >
-                          {fmtHrs(totalTopicSecs)}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 9,
-                            color: "#9ca3af",
-                            fontWeight: 700,
-                          }}
-                        >
-                          TOTAL
-                        </div>
-                      </>
-                    }
+              {/* PIE 1: Time per List (including Pomo Misc) */}
+              <Card style={{ marginBottom: 16 }}>
+                <SectionHead
+                  title="Study Time by Subject"
+                  sub="Based on all timer sessions across tasks + Pomodoro"
+                />
+                {totalStudiedInLists === 0 ? (
+                  <div
+                    style={{
+                      textAlign: "center",
+                      padding: "30px 0",
+                      color: "#9ca3af",
+                      fontSize: 13,
+                    }}
+                  >
+                    No studied time yet — start a timer on a task to see
+                    breakdown
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 20,
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <PieChart
+                      slices={listSlices}
+                      size={180}
+                      center={
+                        <>
+                          <div
+                            style={{
+                              fontFamily: "'Space Grotesk', sans-serif",
+                              fontSize: 14,
+                              fontWeight: 800,
+                              color: "#111827",
+                            }}
+                          >
+                            {fmtHrs(totalStudiedInLists)}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 9,
+                              color: "#9ca3af",
+                              fontWeight: 700,
+                              letterSpacing: "0.08em",
+                            }}
+                          >
+                            TOTAL
+                          </div>
+                        </>
+                      }
+                    />
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth: 140,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                      }}
+                    >
+                      {allListSummaries
+                        .sort((a, b) => b.studied - a.studied)
+                        .map((l) => {
+                          const pct =
+                            totalStudiedInLists > 0
+                              ? Math.round(
+                                  (l.studied / totalStudiedInLists) * 100,
+                                )
+                              : 0;
+                          const isPomo = l.id === "__pomo_misc__";
+                          return (
+                            <div key={l.id}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  marginBottom: 4,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: isPomo ? "2px" : "50%",
+                                    background: l.color,
+                                    flexShrink: 0,
+                                  }}
+                                />
+                                <div
+                                  style={{
+                                    flex: 1,
+                                    fontSize: 12,
+                                    fontWeight: 700,
+                                    color: "#374151",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {isPomo ? "🍅 " : ""}
+                                  {l.name}
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    fontWeight: 800,
+                                    color: l.color,
+                                  }}
+                                >
+                                  {fmtHrs(l.studied)}
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: 10,
+                                    color: "#9ca3af",
+                                    minWidth: 28,
+                                    textAlign: "right",
+                                  }}
+                                >
+                                  {pct}%
+                                </div>
+                              </div>
+                              <div
+                                style={{
+                                  height: 3,
+                                  background: "#f3f4f6",
+                                  borderRadius: 99,
+                                  overflow: "hidden",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    height: "100%",
+                                    width: `${pct}%`,
+                                    background: l.color,
+                                    borderRadius: 99,
+                                    transition: "width 0.5s",
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+              </Card>
+
+              {/* Pomodoro Miscellaneous note */}
+              {pomoMiscEntry && (
+                <div
+                  style={{
+                    background: "linear-gradient(135deg,#fffbeb,#fef3c7)",
+                    border: "1.5px solid #fde68a",
+                    borderRadius: 14,
+                    padding: "14px 18px",
+                    marginBottom: 16,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      marginBottom: 6,
+                    }}
+                  >
+                    <span style={{ fontSize: 20 }}>🍅</span>
+                    <div>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 800,
+                          color: "#92400e",
+                        }}
+                      >
+                        Pomodoro / Miscellaneous
+                      </div>
+                      <div style={{ fontSize: 11, color: "#b45309" }}>
+                        Focus time from Pomodoro sessions not linked to a
+                        specific task
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        marginLeft: "auto",
+                        fontFamily: "'Space Grotesk', sans-serif",
+                        fontSize: 20,
+                        fontWeight: 900,
+                        color: "#d97706",
+                      }}
+                    >
+                      {fmtHrs(pomoLifetimeSecs)}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 11, color: "#92400e" }}>
+                      Today:{" "}
+                      <span style={{ fontWeight: 800, color: "#d97706" }}>
+                        {fmtHrs(pomoTodaySecs)}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#92400e" }}>
+                      All time:{" "}
+                      <span style={{ fontWeight: 800, color: "#d97706" }}>
+                        {fmtHrs(pomoLifetimeSecs)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* PIE 2: Time per Task (top 8) */}
+              {studiedTasks.length > 0 && (
+                <Card style={{ marginBottom: 16 }}>
+                  <SectionHead
+                    title="Top Tasks by Study Time"
+                    sub="Your most focused tasks (up to 8 shown)"
                   />
                   <div
                     style={{
-                      flex: 1,
                       display: "flex",
-                      flexDirection: "column",
-                      gap: 7,
+                      gap: 20,
+                      alignItems: "center",
+                      flexWrap: "wrap",
                     }}
                   >
-                    {[...topics]
-                      .sort((a, b) => b.secs - a.secs)
-                      .slice(0, 5)
-                      .map((t) => (
+                    <PieChart
+                      slices={taskSlices}
+                      size={180}
+                      center={
+                        <>
+                          <div
+                            style={{
+                              fontFamily: "'Space Grotesk', sans-serif",
+                              fontSize: 14,
+                              fontWeight: 800,
+                              color: "#111827",
+                            }}
+                          >
+                            {fmtHrs(totalTaskStudied)}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 9,
+                              color: "#9ca3af",
+                              fontWeight: 700,
+                              letterSpacing: "0.08em",
+                            }}
+                          >
+                            TASKS
+                          </div>
+                        </>
+                      }
+                    />
+                    <div
+                      style={{
+                        flex: 1,
+                        minWidth: 140,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                    >
+                      {taskSlices.map((s, i) => (
                         <div
-                          key={t.id}
+                          key={i}
                           style={{
                             display: "flex",
                             alignItems: "center",
@@ -1554,87 +1821,88 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
                         >
                           <div
                             style={{
-                              width: 8,
-                              height: 8,
+                              width: 6,
+                              height: 6,
                               borderRadius: "50%",
-                              background: t.color,
+                              background: s.color,
                               flexShrink: 0,
                             }}
                           />
                           <div
                             style={{
                               flex: 1,
-                              fontSize: 12,
-                              fontWeight: 600,
+                              fontSize: 11,
                               color: "#374151",
                               overflow: "hidden",
                               textOverflow: "ellipsis",
                               whiteSpace: "nowrap",
                             }}
                           >
-                            {t.name}
+                            {s.label}
                           </div>
                           <div
                             style={{
                               fontSize: 11,
                               fontWeight: 800,
-                              color: t.color,
+                              color: s.color,
+                              flexShrink: 0,
                             }}
                           >
-                            {fmtHrs(t.secs)}
-                          </div>
-                          <div style={{ fontSize: 10, color: "#9ca3af" }}>
-                            {totalTopicSecs > 0
-                              ? Math.round((t.secs / totalTopicSecs) * 100)
-                              : 0}
-                            %
+                            {s.value}
                           </div>
                         </div>
                       ))}
+                    </div>
                   </div>
-                </div>
-              </Card>
+                </Card>
+              )}
 
-              {/* Subject cards */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {[...topics]
-                  .sort((a, b) => b.secs - a.secs)
-                  .map((topic) => {
-                    const live = activeTimer?.id === topic.id;
-                    const liveE = live ? liveElapsed[topic.id] || 0 : 0;
-                    const total = topic.secs + liveE;
+              {/* Per-list expanded view (excluding pomo misc) */}
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: 10 }}
+              >
+                {listSummaries
+                  .sort((a, b) => b.studied - a.studied)
+                  .map((l) => {
+                    const isExp = expandedList === l.id;
                     const pct =
-                      totalTopicSecs > 0
-                        ? (topic.secs / totalTopicSecs) * 100
+                      l.items.length > 0
+                        ? Math.round((l.done / l.items.length) * 100)
                         : 0;
                     return (
                       <div
-                        key={topic.id}
+                        key={l.id}
                         style={{
                           background: "white",
-                          border: `1.5px solid ${live ? topic.color + "55" : "#f3f4f6"}`,
-                          borderRadius: 16,
-                          padding: "14px 16px",
-                          boxShadow: live
-                            ? `0 0 20px ${topic.color}14`
-                            : "0 2px 8px #00000008",
-                          transition: "all 0.2s",
+                          border: `1.5px solid ${isExp ? l.color + "55" : "#f3f4f6"}`,
+                          borderRadius: 18,
+                          overflow: "hidden",
+                          boxShadow: "0 2px 10px #00000008",
+                          transition: "border-color 0.2s",
                         }}
                       >
                         <div
                           style={{
+                            height: 3,
+                            background: `linear-gradient(90deg,${l.color},${l.color}66)`,
+                          }}
+                        />
+                        <div
+                          onClick={() => setExpandedList(isExp ? null : l.id)}
+                          style={{
+                            padding: "14px 18px",
+                            cursor: "pointer",
                             display: "flex",
                             alignItems: "center",
                             gap: 12,
-                            marginBottom: 10,
                           }}
                         >
                           <div
                             style={{
-                              width: 4,
-                              height: 40,
-                              borderRadius: 99,
-                              background: topic.color,
+                              width: 10,
+                              height: 10,
+                              borderRadius: "50%",
+                              background: l.color,
                               flexShrink: 0,
                             }}
                           />
@@ -1642,133 +1910,123 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
                             <div
                               style={{
                                 fontSize: 14,
-                                fontWeight: 700,
+                                fontWeight: 800,
                                 color: "#111827",
                               }}
                             >
-                              {topic.name}
+                              {l.name}
                             </div>
                             <div
                               style={{
-                                fontSize: 12,
-                                color: topic.color,
-                                fontWeight: 800,
-                                fontFamily: "'Space Grotesk', sans-serif",
+                                fontSize: 11,
+                                color: "#9ca3af",
+                                marginTop: 2,
                               }}
                             >
-                              {fmtSecs(total)}
-                              {live && (
-                                <span
-                                  style={{
-                                    animation:
-                                      "trFadeIn 0.5s ease infinite alternate",
-                                  }}
-                                >
-                                  {" "}
-                                  · LIVE
-                                </span>
-                              )}
+                              {l.done}/{l.items.length} done
+                              {l.overdue > 0 ? ` · ${l.overdue} overdue` : ""}
                             </div>
                           </div>
+                          {l.studied > 0 && (
+                            <div
+                              style={{
+                                fontSize: 13,
+                                fontWeight: 800,
+                                color: l.color,
+                              }}
+                            >
+                              {fmtHrs(l.studied)}
+                            </div>
+                          )}
                           <div
                             style={{
                               fontSize: 12,
                               fontWeight: 800,
-                              color: "#9ca3af",
+                              color: pct === 100 ? "#22c55e" : l.color,
                             }}
                           >
-                            {pct.toFixed(0)}%
+                            {pct}%
                           </div>
-                          <button
-                            onClick={() =>
-                              live
-                                ? stopTimer()
-                                : setActiveTimer({
-                                    id: topic.id,
-                                    start: Date.now(),
-                                  })
-                            }
-                            style={{
-                              padding: "6px 14px",
-                              borderRadius: 9,
-                              fontSize: 11,
-                              fontWeight: 800,
-                              cursor: "pointer",
-                              border: "none",
-                              background: live
-                                ? "#22c55e22"
-                                : topic.color + "18",
-                              color: live ? "#22c55e" : topic.color,
-                              outline: `1px solid ${live ? "#22c55e55" : topic.color + "44"}`,
-                            }}
-                          >
-                            {live ? "⏹ Stop" : "▶ Start"}
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (live) setActiveTimer(null);
-                              saveTopics(
-                                topics.filter((t) => t.id !== topic.id),
-                              );
-                            }}
-                            style={{
-                              background: "none",
-                              border: "none",
-                              color: "#d1d5db",
-                              cursor: "pointer",
-                              fontSize: 15,
-                            }}
-                            onMouseEnter={(e) =>
-                              (e.currentTarget.style.color = "#ef4444")
-                            }
-                            onMouseLeave={(e) =>
-                              (e.currentTarget.style.color = "#d1d5db")
-                            }
-                          >
-                            ✕
-                          </button>
-                        </div>
-                        <div
-                          style={{
-                            height: 4,
-                            background: "#f3f4f6",
-                            borderRadius: 99,
-                            overflow: "hidden",
-                          }}
-                        >
                           <div
                             style={{
-                              height: "100%",
-                              width: `${pct}%`,
-                              background: `linear-gradient(90deg,${topic.color},${topic.color}88)`,
-                              borderRadius: 99,
-                              transition: "width 0.5s",
+                              color: "#9ca3af",
+                              fontSize: 14,
+                              transition: "transform 0.2s",
+                              transform: isExp ? "rotate(90deg)" : "none",
                             }}
-                          />
+                          >
+                            ›
+                          </div>
                         </div>
+                        {l.items.length > 0 && (
+                          <div
+                            style={{
+                              height: 3,
+                              background: "#f9f9f9",
+                              margin: "0 18px",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "100%",
+                                width: `${pct}%`,
+                                background: l.color,
+                                transition: "width 0.4s",
+                              }}
+                            />
+                          </div>
+                        )}
+                        {isExp && (
+                          <div
+                            style={{
+                              padding: "12px 16px 16px",
+                              display: "flex",
+                              flexDirection: "column",
+                              gap: 7,
+                              background: "#fafafa",
+                              borderTop: "1px solid #f3f4f6",
+                            }}
+                          >
+                            {l.items.length === 0 ? (
+                              <div
+                                style={{
+                                  textAlign: "center",
+                                  padding: "16px 0",
+                                  color: "#9ca3af",
+                                  fontSize: 12,
+                                }}
+                              >
+                                No tasks in this list
+                              </div>
+                            ) : (
+                              [...l.items]
+                                .sort(
+                                  (a, b) =>
+                                    (b.studiedSecs || 0) - (a.studiedSecs || 0),
+                                )
+                                .map((task) => (
+                                  <TaskRow
+                                    key={task.id}
+                                    task={task}
+                                    listColor={l.color}
+                                    listName={l.name}
+                                  />
+                                ))
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
               </div>
             </>
-          ) : (
-            <div style={{ textAlign: "center", padding: "60px 0" }}>
-              <div style={{ fontSize: 42, marginBottom: 12 }}>◎</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#6b7280" }}>
-                No subjects yet
-              </div>
-              <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 4 }}>
-                Add subjects above to track time per topic
-              </div>
-            </div>
           )}
         </div>
       )}
 
-      {/* ═══════════ TASKS ═══════════ */}
+      {/* ════════════════ TASKS ════════════════ */}
       {section === "tasks" && (
         <div className="tr-sec">
-          {/* Summary */}
           <div
             style={{
               display: "grid",
@@ -1787,7 +2045,7 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             />
             <StatCard
               label="TASK TIME"
-              value={fmtHrs(taskStudied)}
+              value={fmtHrs(totalTaskStudied)}
               sub="studied in tasks"
               color={AC}
               icon="⏱"
@@ -1804,14 +2062,51 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             <StatCard
               label="OVERDUE"
               value={`${overdueTasks.length}`}
-              sub="created before today, not done"
+              sub="not done from past days"
               color="#ef4444"
               icon="⚠️"
               trend={null}
             />
           </div>
 
-          {/* Completion bar */}
+          {/* Pomodoro time in tasks section too */}
+          {pomoTodaySecs > 0 && (
+            <div
+              style={{
+                background: "linear-gradient(135deg,#fffbeb,#fef3c7)",
+                border: "1.5px solid #fde68a",
+                borderRadius: 14,
+                padding: "12px 16px",
+                marginBottom: 14,
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              <span style={{ fontSize: 18 }}>🍅</span>
+              <div style={{ flex: 1 }}>
+                <div
+                  style={{ fontSize: 12, fontWeight: 800, color: "#92400e" }}
+                >
+                  Pomodoro Focus (Today)
+                </div>
+                <div style={{ fontSize: 10, color: "#b45309" }}>
+                  Not attributed to any specific task
+                </div>
+              </div>
+              <div
+                style={{
+                  fontFamily: "'Space Grotesk', sans-serif",
+                  fontSize: 16,
+                  fontWeight: 900,
+                  color: "#d97706",
+                }}
+              >
+                {fmtHrs(pomoTodaySecs)}
+              </div>
+            </div>
+          )}
+
           <Card style={{ marginBottom: 14 }}>
             <div
               style={{
@@ -1845,67 +2140,102 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
             </div>
           </Card>
 
-          {/* Estimated completion */}
-          {estDaysToComplete !== null && (
-            <Card
-              style={{
-                marginBottom: 14,
-                border: "1.5px solid #ede9fe",
-                background: "#faf9ff",
-              }}
-            >
-              <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-                <div
+          <div
+            style={{
+              display: "flex",
+              gap: 6,
+              marginBottom: 14,
+              flexWrap: "wrap",
+              alignItems: "center",
+            }}
+          >
+            <div style={{ display: "flex", gap: 4 }}>
+              {(["all", "active", "done", "studied"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setTaskFilter(f)}
                   style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 14,
-                    background: AC + "18",
-                    border: `1.5px solid ${AC}33`,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 22,
-                    flexShrink: 0,
+                    padding: "5px 11px",
+                    borderRadius: 8,
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    background: taskFilter === f ? AC : "#f3f4f6",
+                    border: "none",
+                    color: taskFilter === f ? "white" : "#6b7280",
+                    transition: "all 0.15s",
                   }}
                 >
-                  🗓
-                </div>
-                <div>
-                  <div
-                    style={{ fontSize: 14, fontWeight: 800, color: "#111827" }}
-                  >
-                    Estimated completion
-                  </div>
-                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                    At your current pace ({fmtHrs(avgDaily)}/day), you'll finish
-                    your remaining tasks in{" "}
-                    <span style={{ fontWeight: 800, color: AC }}>
-                      {estDaysToComplete} day
-                      {estDaysToComplete !== 1 ? "s" : ""}
-                    </span>{" "}
-                    · {fmtHrs(remainingStudy)} of study left
-                  </div>
-                </div>
-              </div>
-            </Card>
-          )}
+                  {f === "all"
+                    ? `All (${allTasks.length})`
+                    : f === "active"
+                      ? `Active (${pendingTasks.length})`
+                      : f === "done"
+                        ? `Done (${doneTasks.length})`
+                        : `Studied (${studiedTasks.length})`}
+                </button>
+              ))}
+            </div>
+            <div
+              style={{
+                marginLeft: "auto",
+                display: "flex",
+                gap: 4,
+                alignItems: "center",
+              }}
+            >
+              <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 700 }}>
+                SORT
+              </span>
+              {(["time", "name", "list"] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setTaskSort(s)}
+                  style={{
+                    padding: "4px 9px",
+                    borderRadius: 7,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    background: taskSort === s ? "#111827" : "#f3f4f6",
+                    border: "none",
+                    color: taskSort === s ? "white" : "#6b7280",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {s === "time" ? "⏱ Time" : s === "name" ? "A–Z" : "List"}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          {/* Per-list breakdown */}
-          <Card>
-            <SectionHead title="By List" />
-            {todoLists.length === 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+            {filteredTasks.length === 0 ? (
               <div
                 style={{
                   textAlign: "center",
-                  padding: "24px 0",
+                  padding: "40px 0",
                   color: "#9ca3af",
                   fontSize: 13,
                 }}
               >
-                No lists yet
+                No tasks match this filter
               </div>
             ) : (
+              filteredTasks.map((task) => (
+                <TaskRow
+                  key={task.id + task.listId}
+                  task={task}
+                  listColor={task.listColor}
+                  listName={task.listName}
+                />
+              ))
+            )}
+          </div>
+
+          {todoLists.length > 0 && (
+            <Card style={{ marginTop: 18 }}>
+              <SectionHead title="By List" />
               <div
                 style={{ display: "flex", flexDirection: "column", gap: 14 }}
               >
@@ -1923,10 +2253,7 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
                       0,
                     );
                     const over = list.items.filter(
-                      (t) =>
-                        !t.done &&
-                        t.createdAt &&
-                        t.createdAt.slice(0, 10) < TODAY,
+                      (t) => !t.done && t.createdAt?.slice(0, 10) < TODAY,
                     ).length;
                     const p = total > 0 ? Math.round((done / total) * 100) : 0;
                     return (
@@ -2019,8 +2346,8 @@ export default function TrackerTab({ onStudyTime, initialTopics }: Props) {
                     );
                   })}
               </div>
-            )}
-          </Card>
+            </Card>
+          )}
         </div>
       )}
     </div>

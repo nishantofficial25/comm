@@ -65,10 +65,6 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${plusJakarta.variable} ${instrumentSerif.variable} ${firaCode.variable}`}
     >
-      <Script
-        src="https://accounts.google.com/gsi/client"
-        strategy="beforeInteractive"
-      />
       <head>
         {/* PWA */}
         <link rel="manifest" href="/manifest.json" />
@@ -99,7 +95,7 @@ export default function RootLayout({
         `}
       </Script>
  */}
-      <body className="antialiased">
+      <body>
         {/* <Analytics /> */}
         {/* <Navbar /> */}
         <GoogleOAuthProvider clientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!}>

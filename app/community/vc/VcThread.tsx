@@ -20,6 +20,8 @@ import {
 } from "./vcAtoms";
 
 interface Post {
+  image: any;
+  imageUrl?: string | null;
   _id: string;
   slug: string;
   title: string;
@@ -78,10 +80,7 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editBody, setEditBody] = useState("");
-  const [replyingTo, setReplyingTo] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const toast = useToast();
   const replyRef = useRef<HTMLTextAreaElement>(null);
 
@@ -93,6 +92,7 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
     if (d.post) setPost(d.post);
     return (d.replies || []) as Reply[];
   }, [slug, bid]);
+
   const [liveReplies] = usePolling(replyFetcher, 4000, !loading);
   useEffect(() => {
     if (!loading) setReplies(liveReplies);
@@ -123,6 +123,7 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
     const d = await r.json();
     setPost((p) => (p ? { ...p, votes: d.votes, voted: d.voted } : p));
   }
+
   async function voteReply(replyId: string) {
     const r = await fetch(
       `${API}/api/void/posts/${slug}/replies/${replyId}/vote`,
@@ -140,7 +141,9 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
       ),
     );
   }
-  async function postReply() {
+
+  // Top-level comment submit
+  async function postTopLevelReply() {
     if (!replyTxt.trim()) {
       toast.show("Write something first", true);
       return;
@@ -154,8 +157,8 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
           body: replyTxt.trim(),
           browserId: bid,
           anonName: myName,
-          parentReplyId: replyingTo?.id || null,
-          parentAnonName: replyingTo?.name || null,
+          parentReplyId: null,
+          parentAnonName: null,
         }),
       });
       const d = await r.json();
@@ -163,8 +166,7 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
         setReplies((p) => [...p, d.reply]);
         setPost((p) => (p ? { ...p, replyCount: p.replyCount + 1 } : p));
         setReplyTxt("");
-        setReplyingTo(null);
-        toast.show("Reply posted ✓");
+        toast.show("Comment posted ✓");
       } else toast.show(d.error || "Failed", true);
     } catch {
       toast.show("Failed", true);
@@ -172,6 +174,35 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
       setSending(false);
     }
   }
+
+  // Inline reply submit — called from ReplyThread with text included
+  async function handleInlineReply(
+    parentId: string,
+    parentName: string,
+    text: string,
+  ) {
+    const r = await fetch(`${API}/api/void/posts/${slug}/replies`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        body: text,
+        browserId: bid,
+        anonName: myName,
+        parentReplyId: parentId,
+        parentAnonName: parentName,
+      }),
+    });
+    const d = await r.json();
+    if (d.reply) {
+      setReplies((p) => [...p, d.reply]);
+      setPost((p) => (p ? { ...p, replyCount: p.replyCount + 1 } : p));
+      toast.show("Reply posted ✓");
+    } else {
+      toast.show(d.error || "Failed", true);
+      throw new Error(d.error || "Failed");
+    }
+  }
+
   async function saveEdit() {
     if (!editTitle.trim()) {
       toast.show("Title required", true);
@@ -192,118 +223,138 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
       toast.show("Updated ✓");
     } else toast.show("Could not update", true);
   }
+
   async function del() {
-    if (!confirm("Delete this post permanently?")) return;
     const r = await fetch(`${API}/api/void/posts/${slug}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ browserId: bid }),
     });
     if (r.ok) onBack();
-    else toast.show("Could not delete", true);
+    else {
+      toast.show("Could not delete", true);
+      setDeleteConfirm(false);
+    }
   }
 
   if (loading)
     return (
-      <div className="pt-4">
+      <div className="pt-4 space-y-3">
         <SkelCard tall />
         <SkelCard />
       </div>
     );
+
   if (!post)
     return (
-      <div style={{ textAlign: "center", padding: "80px 0" }}>
-        <div style={{ fontSize: 48 }}>🔍</div>
-        <h2 style={{ color: "#6b6b8a", marginTop: 16 }}>Post not found</h2>
+      <div className="flex flex-col items-center justify-center py-24 text-center px-6">
+        <div className="w-20 h-20 rounded-3xl bg-[#ebe8fc] flex items-center justify-center text-4xl mb-5">
+          🔍
+        </div>
+        <h2 className="text-xl font-black text-[#1a1a2e] mb-2">
+          Post not found
+        </h2>
+        <p className="text-sm text-[#a0a0bc] mb-6">
+          This post may have been deleted.
+        </p>
         <button
           onClick={onBack}
-          style={{
-            marginTop: 16,
-            padding: "10px 24px",
-            background: "#673de6",
-            border: "none",
-            borderRadius: 12,
-            color: "white",
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
+          className="px-6 py-2.5 bg-[#673de6] text-white text-sm font-bold rounded-xl border-none cursor-pointer hover:bg-[#5a32cc] transition-colors shadow-[0_4px_14px_rgba(103,61,230,0.3)]"
         >
-          ← Back
+          ← Back to feed
         </button>
       </div>
     );
 
-  const inp = {
-    background: "#f4f4f8",
-    border: "1.5px solid #e2e2ef",
-    borderRadius: 12,
-    padding: "10px 14px",
-    fontSize: 13,
-    outline: "none",
-    color: "#1a1a2e",
-    width: "100%",
-    marginBottom: 10,
-    transition: "border-color 0.2s",
-    display: "block" as const,
-  };
+  const imgUrl = post.imageUrl || post.image || null;
 
   return (
-    <div className="vc-fadein">
-      {/* Post card */}
-      <div
-        style={{
-          background: "white",
-          border: "1px solid #e2e2ef",
-          borderRadius: 18,
-          marginBottom: 8,
-          overflow: "hidden",
-          boxShadow: "0 1px 4px #00000006",
-        }}
-      >
-        <div style={{ padding: "20px 20px 0" }}>
+    <div
+      className="vc-fadein pb-8"
+      style={{ padding: "0", maxWidth: 700, margin: "0 auto" }}
+    >
+      {/* ── Delete modal ── */}
+      {deleteConfirm && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center p-5"
+          onClick={() => setDeleteConfirm(false)}
+        >
+          <div className="absolute inset-0 bg-[rgba(10,8,30,0.5)] backdrop-blur-sm" />
           <div
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 12,
-              marginBottom: 12,
-            }}
+            className="relative bg-white rounded-[22px] w-[min(400px,92vw)] overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
           >
+            <div className="h-1 bg-gradient-to-r from-red-600 to-red-400" />
+            <div className="p-7">
+              <div className="w-12 h-12 rounded-2xl bg-red-50 border border-red-100 flex items-center justify-center mb-4">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"
+                    stroke="#dc2626"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M10 11v6M14 11v6"
+                    stroke="#dc2626"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </div>
+              <p className="text-[17px] font-black text-[#1a1a2e] mb-2">
+                Delete this post?
+              </p>
+              <p className="text-[13px] text-[#6b6b8a] leading-relaxed mb-6">
+                This is permanent. The post and all its replies will be removed
+                and cannot be recovered.
+              </p>
+              <div className="flex gap-2.5">
+                <button
+                  onClick={() => setDeleteConfirm(false)}
+                  className="flex-1 py-2.5 rounded-[13px] text-[13px] font-bold bg-[#f4f4f8] border border-[#e2e2ef] text-[#6b6b8a] cursor-pointer hover:border-[#673de6] hover:text-[#673de6] transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={del}
+                  className="flex-1 py-2.5 rounded-[13px] text-[13px] font-bold bg-gradient-to-br from-red-600 to-red-400 text-white border-none cursor-pointer shadow-[0_4px_14px_rgba(220,38,38,0.3)] hover:shadow-[0_6px_20px_rgba(220,38,38,0.4)] hover:scale-[1.02] transition-all"
+                >
+                  Yes, delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Post card ── */}
+      <div className="bg-white rounded-2xl border border-[#e2e2ef] shadow-[0_2px_16px_rgba(0,0,0,0.07)] overflow-hidden mb-3">
+        <div className="p-5">
+          {/* Author row */}
+          <div className="flex items-start gap-3 mb-4">
             <Av
-              size={36}
+              size={38}
               id={post.browserId || ""}
               picture={picture && isOwner ? picture : undefined}
             />
-            <div style={{ flex: 1 }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  flexWrap: "wrap",
-                }}
-              >
-                <span
-                  style={{ fontSize: 13, fontWeight: 700, color: "#1a1a2e" }}
-                >
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[13px] font-bold text-[#1a1a2e]">
                   {post.anonName}
                 </span>
                 {isOwner && <Badge color="amber">YOU</Badge>}
-                <span style={{ fontSize: 11, color: "#a0a0bc" }}>
+                <span className="text-[11px] text-[#a0a0bc]">
                   · {ago(post.createdAt)}
                 </span>
                 {post.community && (
                   <button
                     onClick={() => onOpenCommunity(post.community!)}
+                    className="text-[11px] font-bold px-2 py-0.5 rounded-full border-none cursor-pointer hover:opacity-75 transition-opacity"
                     style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      padding: "2px 8px",
-                      borderRadius: 99,
                       background: (post.communityColor || "#673de6") + "18",
                       color: post.communityColor || "#673de6",
-                      border: "none",
-                      cursor: "pointer",
                     }}
                   >
                     {post.communityEmoji || "🌐"}{" "}
@@ -311,67 +362,41 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
                   </button>
                 )}
               </div>
+              {!imgUrl && (
+                <span className="inline-block mt-1.5 text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#ebe8fc] text-[#673de6] uppercase tracking-wide">
+                  {post.category}
+                </span>
+              )}
             </div>
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 800,
-                padding: "2px 8px",
-                borderRadius: 99,
-                background: "#ebe8fc",
-                color: "#673de6",
-                textTransform: "uppercase",
-              }}
-            >
-              {post.category}
-            </span>
           </div>
 
+          {/* Edit mode */}
           {editing ? (
-            <div style={{ marginBottom: 16 }}>
+            <div className="space-y-2.5 mb-4">
               <input
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
                 autoFocus
-                style={{ ...inp, fontWeight: 700, fontSize: 16 }}
-                onFocus={(e) => (e.target.style.borderColor = "#673de6")}
-                onBlur={(e) => (e.target.style.borderColor = "#e2e2ef")}
+                placeholder="Post title"
+                className="w-full bg-[#f4f4f8] border-[1.5px] border-[#e2e2ef] rounded-xl px-4 py-2.5 text-[15px] font-bold text-[#1a1a2e] outline-none transition-colors focus:border-[#673de6] placeholder:text-[#c4c4d8]"
               />
               <textarea
                 value={editBody}
                 onChange={(e) => setEditBody(e.target.value)}
                 rows={4}
-                style={{ ...inp, resize: "y" }}
-                onFocus={(e) => (e.target.style.borderColor = "#673de6")}
-                onBlur={(e) => (e.target.style.borderColor = "#e2e2ef")}
+                placeholder="Details (optional)"
+                className="w-full bg-[#f4f4f8] border-[1.5px] border-[#e2e2ef] rounded-xl px-4 py-2.5 text-[13px] text-[#1a1a2e] outline-none resize-y transition-colors focus:border-[#673de6] placeholder:text-[#c4c4d8]"
               />
-              <div style={{ display: "flex", gap: 8 }}>
+              <div className="flex gap-2 pt-1">
                 <button
                   onClick={saveEdit}
-                  style={{
-                    padding: "8px 20px",
-                    background: "#673de6",
-                    border: "none",
-                    borderRadius: 10,
-                    color: "white",
-                    fontWeight: 700,
-                    fontSize: 13,
-                    cursor: "pointer",
-                  }}
+                  className="px-5 py-2 bg-[#673de6] text-white text-[13px] font-bold rounded-xl border-none cursor-pointer hover:bg-[#5a32cc] transition-colors shadow-[0_2px_8px_rgba(103,61,230,0.3)]"
                 >
-                  Save
+                  Save changes
                 </button>
                 <button
                   onClick={() => setEditing(false)}
-                  style={{
-                    padding: "8px 20px",
-                    border: "1px solid #e2e2ef",
-                    borderRadius: 10,
-                    color: "#6b6b8a",
-                    fontSize: 13,
-                    background: "none",
-                    cursor: "pointer",
-                  }}
+                  className="px-5 py-2 border border-[#e2e2ef] text-[#6b6b8a] text-[13px] rounded-xl bg-transparent cursor-pointer hover:border-[#673de6] hover:text-[#673de6] transition-colors"
                 >
                   Cancel
                 </button>
@@ -379,57 +404,48 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
             </div>
           ) : (
             <>
-              <h1
-                style={{
-                  fontSize: 22,
-                  fontWeight: 900,
-                  color: "#1a1a2e",
-                  lineHeight: 1.3,
-                  marginBottom: 10,
-                }}
-              >
+              <h1 className="text-[21px] font-black text-[#1a1a2e] leading-snug mb-3">
                 {post.title}
               </h1>
+              {/* Hero image */}
+              {imgUrl && (
+                <div className="relative w-full bg-[#0d0d14] mb-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={imgUrl}
+                    alt={post.title}
+                    loading="lazy"
+                    className="w-full h-auto max-h-[560px] object-contain block"
+                    style={{ borderRadius: "20px" }}
+                  />
+                  <div className="absolute bottom-0 left-0 right-0 h-14 bg-gradient-to-b from-transparent to-[rgba(10,8,30,0.6)] pointer-events-none" />
+                </div>
+              )}
               {post.body && (
-                <p
-                  style={{
-                    fontSize: 14,
-                    color: "#6b6b8a",
-                    lineHeight: 1.7,
-                    marginBottom: 12,
-                  }}
-                >
-                  {post.body}
+                <p className="text-[14px] text-[#6b6b8a] leading-[1.75] mb-4 whitespace-pre-wrap">
+                  {post.body} Lorem, ipsum dolor sit amet consectetur
+                  adipisicing elit. Eaque aperiam cumque amet consequatur aut
+                  expedita? Itaque numquam nam porro vel repudiandae beatae?
+                  Quidem reiciendis obcaecati voluptates ut perspiciatis dolores
+                  cum laborum ea omnis fugit sint architecto eos officiis
+                  officia enim, qui facilis. Maiores, illum asperiores! Expedita
+                  assumenda dicta sed iusto.
                 </p>
               )}
             </>
           )}
+
           {post.tags.length > 0 && !editing && (
-            <div
-              style={{
-                display: "flex",
-                gap: 6,
-                flexWrap: "wrap",
-                marginBottom: 12,
-              }}
-            >
+            <div className="flex gap-1.5 flex-wrap">
               {post.tags.map((t) => (
                 <TagChip key={t} tag={t} />
               ))}
             </div>
           )}
         </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            padding: "8px 12px",
-            borderTop: "1px solid #e2e2ef",
-            background: "#f4f4f8",
-            flexWrap: "wrap",
-          }}
-        >
+
+        {/* Action bar */}
+        <div className="flex items-center gap-1 px-3 py-2 border-t border-[#f0f0f8] bg-[#fafafe] flex-wrap">
           <VoteRow voted={post.voted} count={post.votes} onVote={votePost} />
           <ActBtn
             onClick={() => replyRef.current?.focus()}
@@ -447,7 +463,7 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
           />
           {isOwner && !editing && (
             <>
-              <div style={{ flex: 1 }} />
+              <div className="flex-1" />
               <ActBtn
                 onClick={() => {
                   setEditTitle(post.title);
@@ -457,308 +473,242 @@ export default function VcThread({ slug, onBack, onOpenCommunity }: Props) {
                 icon={<EditIco />}
                 label="Edit"
               />
-              <ActBtn onClick={del} icon={<TrashIco />} label="Delete" danger />
+              <ActBtn
+                onClick={() => setDeleteConfirm(true)}
+                icon={<TrashIco />}
+                label="Delete"
+                danger
+              />
             </>
           )}
         </div>
       </div>
 
-      {/* Replies */}
-      <div
-        style={{
-          background: "white",
-          border: "1px solid #e2e2ef",
-          borderRadius: 18,
-          overflow: "hidden",
-          marginBottom: 8,
-          boxShadow: "0 1px 4px #00000006",
-        }}
-      >
-        {replies.length > 0 && (
-          <div
-            style={{
-              padding: "10px 20px",
-              borderBottom: "1px solid #e2e2ef",
-              background: "#f4f4f8",
-              fontSize: 11,
-              fontWeight: 800,
-              color: "#a0a0bc",
-              letterSpacing: "0.1em",
-              textTransform: "uppercase",
-            }}
-          >
-            {replies.length} {replies.length === 1 ? "Comment" : "Comments"}
-          </div>
-        )}
-        {replies.length === 0 && (
-          <div
-            style={{
-              padding: "40px 20px",
-              textAlign: "center",
-              fontSize: 13,
-              color: "#a0a0bc",
-            }}
-          >
-            No replies yet — be the first 👋
-          </div>
-        )}
-        <div style={{ padding: "12px 20px" }}>
-          {nestedReplies.map((r, i) => (
-            <ReplyThread
-              key={r._id}
-              reply={r}
-              post={post}
-              bid={bid}
-              depth={0}
-              onVote={voteReply}
-              onReply={(id, name) => {
-                setReplyingTo({ id, name });
-                setTimeout(() => replyRef.current?.focus(), 80);
-              }}
-              style={{ animation: `vcFadeUp 0.3s ease ${i * 0.04}s both` }}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Composer */}
-      <div
-        style={{
-          background: "white",
-          border: "1px solid #e2e2ef",
-          borderRadius: 18,
-          overflow: "hidden",
-          boxShadow: "0 1px 4px #00000006",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "10px 16px",
-            borderBottom: "1px solid #e2e2ef",
-            background: "#f4f4f8",
-          }}
-        >
-          <Av size={26} id={bid} picture={picture} />
-          <div style={{ fontSize: 13, color: "#6b6b8a" }}>
-            {replyingTo ? (
-              <>
-                Replying to{" "}
-                <strong style={{ color: "#673de6" }}>@{replyingTo.name}</strong>{" "}
-                as <strong style={{ color: "#1a1a2e" }}>{myName}</strong>{" "}
-                <button
-                  onClick={() => setReplyingTo(null)}
-                  style={{
-                    fontSize: 11,
-                    color: "#a0a0bc",
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    marginLeft: 4,
-                  }}
-                >
-                  ✕ cancel
-                </button>
-              </>
-            ) : (
-              <>
-                Replying as{" "}
-                <strong style={{ color: "#1a1a2e" }}>{myName}</strong>
-              </>
-            )}
-          </div>
-        </div>
+      {/* ── Top-level comment composer ── */}
+      <div className="bg-white rounded-2xl border border-[#e2e2ef] shadow-[0_2px_16px_rgba(0,0,0,0.07)] overflow-hidden mb-3">
         <textarea
           ref={replyRef}
           value={replyTxt}
           onChange={(e) => setReplyTxt(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && e.ctrlKey) postReply();
+            if (e.key === "Enter" && e.ctrlKey) postTopLevelReply();
           }}
           placeholder="Share your thoughts…"
           rows={3}
-          style={{
-            width: "100%",
-            background: "transparent",
-            border: "none",
-            padding: "16px 20px",
-            fontSize: 13,
-            resize: "vertical",
-            minHeight: 80,
-            outline: "none",
-            color: "#1a1a2e",
-            display: "block",
-          }}
+          className="w-full bg-transparent border-none px-5 py-3 text-[13px] resize-none min-h-[80px] outline-none text-[#1a1a2e] block placeholder:text-[#c4c4d8]"
         />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "8px 16px",
-            borderTop: "1px solid #e2e2ef",
-            background: "#f4f4f8",
-          }}
-        >
-          <span style={{ fontSize: 11, color: "#a0a0bc" }}>
-            Ctrl+Enter to post
+        <div className="flex items-center justify-between px-2 py-1.5 border-t border-[#f4f4f8]">
+          <span className="text-[11px] text-[#d4d4e8] hidden sm:block select-none">
+            Ctrl + Enter to post
           </span>
           <button
-            onClick={postReply}
+            onClick={postTopLevelReply}
             disabled={sending}
+            className="ml-auto px-5 py-1.5 rounded-xl text-[13px] font-bold text-white border-none transition-all"
             style={{
-              padding: "7px 20px",
-              borderRadius: 10,
-              fontSize: 13,
-              fontWeight: 700,
-              color: "white",
-              background: sending ? "#c4c4d8" : "#673de6",
-              border: "none",
+              background: sending
+                ? "#c4c4d8"
+                : "linear-gradient(135deg,#673de6,#4f46e5)",
               cursor: sending ? "not-allowed" : "pointer",
+              boxShadow: sending ? "none" : "0 4px 14px rgba(103,61,230,0.35)",
             }}
           >
             {sending ? "Posting…" : "Comment"}
           </button>
         </div>
       </div>
+
+      {/* ── Comments section ── */}
+      <div className="bg-white rounded-2xl border border-[#e2e2ef] shadow-[0_2px_16px_rgba(0,0,0,0.07)] overflow-hidden">
+        <div className="flex items-center gap-2 px-5 py-3 border-b border-[#f0f0f8] bg-[#fafafe]">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path
+              d="M12 1H2a1 1 0 00-1 1v7a1 1 0 001 1h2l2 3 2-3h4a1 1 0 001-1V2a1 1 0 00-1-1z"
+              stroke="#a0a0bc"
+              strokeWidth="1.3"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <span className="text-[11px] font-extrabold text-[#a0a0bc] uppercase tracking-widest">
+            {replies.length} {replies.length === 1 ? "Comment" : "Comments"}
+          </span>
+        </div>
+
+        {replies.length === 0 ? (
+          <div className="flex flex-col items-center py-14 px-6 text-center">
+            <div className="w-14 h-14 rounded-2xl bg-[#f4f4f8] flex items-center justify-center text-2xl mb-3">
+              💬
+            </div>
+            <p className="text-[14px] font-bold text-[#1a1a2e] mb-1">
+              No comments yet
+            </p>
+            <p className="text-[12px] text-[#a0a0bc]">
+              Be the first to share your thoughts 👋
+            </p>
+          </div>
+        ) : (
+          <div className="px-5 py-2 divide-y divide-[#f6f6fb]">
+            {nestedReplies.map((r, i) => (
+              <ReplyThread
+                key={r._id}
+                reply={r}
+                post={post}
+                bid={bid}
+                depth={0}
+                myName={myName}
+                onVote={voteReply}
+                onReply={handleInlineReply}
+                animDelay={i * 0.04}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
       {toast.on && <Toast msg={toast.msg} err={toast.err} />}
     </div>
   );
 }
 
+// ── ReplyThread ───────────────────────────────────────────────────────────────
 function ReplyThread({
   reply: r,
   post,
   bid,
+  myName,
   depth,
   onVote,
   onReply,
-  style,
+  animDelay,
 }: {
   reply: Reply;
   post: Post;
   bid: string;
+  myName: string;
   depth: number;
   onVote: (id: string) => void;
-  onReply: (id: string, name: string) => void;
-  style?: React.CSSProperties;
+  onReply: (
+    parentId: string,
+    parentName: string,
+    text: string,
+  ) => Promise<void>;
+  animDelay?: number;
 }) {
   const isAuthor =
     !!post.browserId && !!r.browserId && r.browserId === post.browserId;
   const isMe = !!bid && r.browserId === bid && !isAuthor;
   const [collapsed, setCollapsed] = useState(false);
+  const [showReplyBox, setShowReplyBox] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [sending, setSending] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const hasKids = (r.children || []).length > 0;
+
+  function openReplyBox() {
+    setShowReplyBox((v) => !v);
+    setReplyText("");
+    setTimeout(() => textareaRef.current?.focus(), 60);
+  }
+
+  async function submitReply() {
+    if (!replyText.trim() || sending) return;
+    setSending(true);
+    try {
+      await onReply(r._id, r.anonName, replyText.trim());
+      setReplyText("");
+      setShowReplyBox(false);
+    } catch {
+      // error toast handled by parent
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const hasChildren = (r.children || []).length > 0;
+  const showLine = (hasChildren || showReplyBox) && !collapsed;
+
   return (
-    <div style={style}>
-      <div style={{ display: "flex", gap: 8, padding: "10px 0" }}>
+    <div
+      style={{
+        animation:
+          animDelay !== undefined
+            ? `vcFadeUp 0.3s ease ${animDelay}s both`
+            : undefined,
+      }}
+    >
+      <div className="flex gap-3 pt-3">
+        {/* Left column: avatar on top, then the line as a border runs the full remaining height */}
         <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 4,
-            width: 28,
-            flexShrink: 0,
-          }}
+          className="flex flex-col items-center shrink-0"
+          style={{ width: 28 }}
         >
+          {/* Avatar */}
           <button
             onClick={() => setCollapsed((x) => !x)}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              padding: 0,
-            }}
+            className="bg-transparent border-none cursor-pointer p-0 shrink-0 group"
           >
-            <div
-              style={{
-                width: 24,
-                height: 24,
-                borderRadius: "50%",
-                background: "#ebe8fc",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 12,
-              }}
-            >
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#ebe8fc] to-[#ddd5fa] flex items-center justify-center text-xs shadow-sm group-hover:from-[#673de6] group-hover:to-[#4f46e5] group-hover:text-white transition-all duration-200">
               👤
             </div>
           </button>
-          {hasKids && !collapsed && (
+
+          {/* Line: a simple div that grows to fill ALL remaining height of the left column */}
+          {showLine && (
             <div
-              style={{
-                flex: 1,
-                width: 2,
-                minHeight: 12,
-                background: "#e2e2ef",
-                borderRadius: 99,
-                cursor: "pointer",
-              }}
               onClick={() => setCollapsed(true)}
+              className="cursor-pointer mt-1 hover:opacity-100 transition-opacity"
+              style={{
+                width: 2,
+                flexGrow: 1,
+                background: "#d8d4f0",
+                borderRadius: 99,
+                minHeight: 20,
+              }}
+              onMouseEnter={(e) =>
+                ((e.currentTarget as HTMLElement).style.background = "#673de6")
+              }
+              onMouseLeave={(e) =>
+                ((e.currentTarget as HTMLElement).style.background = "#d8d4f0")
+              }
             />
           )}
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              flexWrap: "wrap",
-              marginBottom: 4,
-            }}
-          >
-            <span style={{ fontSize: 12, fontWeight: 700, color: "#1a1a2e" }}>
+
+        {/* Right column: content + nested children */}
+        <div className="flex-1 min-w-0">
+          {/* Meta row */}
+          <div className="flex items-center gap-1.5 flex-wrap mb-1.5 pt-0.5">
+            <span className="text-[12px] font-bold text-[#1a1a2e]">
               {r.anonName}
             </span>
             {isAuthor && <Badge color="purple">OP</Badge>}
             {isMe && <Badge color="amber">YOU</Badge>}
-            <span style={{ fontSize: 10, color: "#a0a0bc" }}>
+            <span className="text-[10px] text-[#c4c4d8]">
               {ago(r.createdAt)}
             </span>
           </div>
+
           {collapsed ? (
             <button
               onClick={() => setCollapsed(false)}
-              style={{
-                fontSize: 12,
-                color: "#a0a0bc",
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                fontStyle: "italic",
-              }}
+              className="text-[11px] text-[#a0a0bc] bg-[#f4f4f8] border border-[#e2e2ef] px-2.5 py-1 rounded-lg cursor-pointer italic font-medium hover:border-[#673de6] hover:text-[#673de6] transition-colors mb-3"
             >
-              [{(r.children || []).length + 1} collapsed] — expand
+              [{(r.children || []).length + 1} hidden] · expand
             </button>
           ) : (
             <>
               {r.parentReplyId && r.parentAnonName && (
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: "#673de6",
-                    fontWeight: 600,
-                    marginBottom: 4,
-                  }}
-                >
+                <div className="text-[11px] text-[#673de6] font-semibold mb-1.5 opacity-70">
                   ↳ @{r.parentAnonName}
                 </div>
               )}
-              <p
-                style={{
-                  fontSize: 13,
-                  color: "#4a4a6a",
-                  lineHeight: 1.6,
-                  marginBottom: 8,
-                }}
-              >
+
+              <p className="text-[13px] text-[#4a4a6a] leading-relaxed mb-2 whitespace-pre-wrap">
                 {r.body}
               </p>
-              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+
+              {/* Vote + Reply */}
+              <div className="flex items-center gap-0.5 mb-1">
                 <VoteRow
                   voted={r.voted}
                   count={r.votes}
@@ -766,50 +716,92 @@ function ReplyThread({
                   small
                 />
                 <button
-                  onClick={() => onReply(r._id, r.anonName)}
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    padding: "4px 10px",
-                    borderRadius: 99,
-                    background: "none",
-                    border: "none",
-                    color: "#6b6b8a",
-                    cursor: "pointer",
-                  }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.background = "#f4f4f8")
-                  }
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "")}
+                  onClick={openReplyBox}
+                  className={`text-[11px] font-bold px-2.5 py-1 rounded-full border-none cursor-pointer transition-colors ${
+                    showReplyBox
+                      ? "bg-[#ebe8fc] text-[#673de6]"
+                      : "bg-transparent text-[#a0a0bc] hover:bg-[#ebe8fc] hover:text-[#673de6]"
+                  }`}
                 >
-                  Reply
+                  ↩ Reply
                 </button>
               </div>
+
+              {/* ── Inline reply box ── */}
+              {showReplyBox && (
+                <div className="mt-2 mb-2 bg-[#f9f8ff] border border-[#e4dff8] rounded-2xl overflow-hidden">
+                  <textarea
+                    ref={textareaRef}
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && e.ctrlKey) submitReply();
+                    }}
+                    placeholder={`Reply to @${r.anonName}…`}
+                    rows={2}
+                    className="w-full bg-transparent border-none px-3.5 py-2.5 text-[13px] text-[#1a1a2e] outline-none resize-none block placeholder:text-[#c4c4d8]"
+                  />
+                  <div className="flex items-center justify-between px-3.5 py-2 border-t border-[#ede9ff]">
+                    <span className="text-[10px] text-[#d4d4e8] hidden sm:block select-none">
+                      Ctrl+Enter to post
+                    </span>
+                    <div className="flex gap-2 ml-auto">
+                      <button
+                        onClick={() => {
+                          setShowReplyBox(false);
+                          setReplyText("");
+                        }}
+                        className="px-3 py-1 text-[12px] text-[#a0a0bc] bg-white border border-[#e2e2ef] rounded-lg cursor-pointer hover:border-[#673de6] hover:text-[#673de6] transition-colors font-medium"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={submitReply}
+                        disabled={sending || !replyText.trim()}
+                        className="px-4 py-1 text-[12px] font-bold text-white rounded-lg border-none transition-all"
+                        style={{
+                          background:
+                            sending || !replyText.trim()
+                              ? "#c4c4d8"
+                              : "linear-gradient(135deg,#673de6,#4f46e5)",
+                          cursor:
+                            sending || !replyText.trim()
+                              ? "not-allowed"
+                              : "pointer",
+                          boxShadow:
+                            sending || !replyText.trim()
+                              ? "none"
+                              : "0 2px 8px rgba(103,61,230,0.35)",
+                        }}
+                      >
+                        {sending ? "Posting…" : "Post reply"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Nested children (indented, line continues through them) ── */}
+              {!collapsed &&
+                depth < 5 &&
+                (r.children || []).map((child) => (
+                  <ReplyThread
+                    key={child._id}
+                    reply={child}
+                    post={post}
+                    bid={bid}
+                    myName={myName}
+                    depth={depth + 1}
+                    onVote={onVote}
+                    onReply={onReply}
+                  />
+                ))}
             </>
           )}
+
+          <div className="pb-3" />
         </div>
       </div>
-      {!collapsed &&
-        depth < 5 &&
-        (r.children || []).map((child) => (
-          <div
-            key={child._id}
-            style={{
-              marginLeft: 28,
-              borderLeft: "2px solid #e2e2ef",
-              paddingLeft: 8,
-            }}
-          >
-            <ReplyThread
-              reply={child}
-              post={post}
-              bid={bid}
-              depth={depth + 1}
-              onVote={onVote}
-              onReply={onReply}
-            />
-          </div>
-        ))}
     </div>
   );
 }

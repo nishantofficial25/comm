@@ -2,14 +2,15 @@
 /**
  * FullscreenStopwatch
  *
+ * Key fix: onDone(totalSecs) sends resumeSecs + thisSessionElapsed.
+ * The parent must SET task.studiedSecs = totalSecs directly (not add a delta)
+ * and compute the daily-total increment as:
+ *   increment = totalSecs - previousStudiedSecs (read fresh from localStorage)
+ * This avoids double-counting when localCheckpoint has already baked time in.
+ *
  * Pause is persisted into TIMER_KEY so MiniTimerBadge respects it.
  * TIMER_KEY format (extended):
  *   { taskId, listIdx, savedSecs, sessionStart, pausedAt?: number, totalPausedMs: number }
- *
- * - pausedAt    = epoch ms when paused (null if running)
- * - totalPausedMs = total ms already paused before this pause period
- *
- * Effective elapsed = floor((now - sessionStart - totalPausedMs - currentPauseDuration) / 1000)
  */
 import { useState, useEffect, useRef, useCallback } from "react";
 import { fmtSecs } from "../lib/utils";
@@ -33,7 +34,9 @@ interface Props {
   state: FullscreenTimerState;
   onMinimise: () => void;
   onStop: () => void;
-  onDone: (elapsedSecs: number) => void;
+  /** Called with the FULL total studied seconds (resumeSecs + this session).
+   *  Parent should SET studiedSecs to this value, not add it as a delta. */
+  onDone: (totalSecs: number) => void;
   onReset: () => void;
 }
 
@@ -231,7 +234,6 @@ export function MiniTimerBadge({
   const sessionStart = state.sessionStart ?? Date.now();
   const resumeSecs = state.resumeSecs ?? 0;
   const totalPausedMs = state.totalPausedMs ?? 0;
-  // Treat undefined, null, 0 all as "not paused"; only a real positive epoch = paused
   const pausedAt =
     state.pausedAt != null && state.pausedAt > 0 ? state.pausedAt : null;
   const isPaused = pausedAt !== null;
@@ -241,18 +243,15 @@ export function MiniTimerBadge({
   );
 
   useEffect(() => {
-    // When paused: freeze display at exact pause moment, no interval
     if (isPaused) {
       setElapsed(computeElapsed(sessionStart, totalPausedMs, pausedAt));
-      return; // no cleanup needed — no interval started
+      return;
     }
-    // When running: tick every 500ms
     const iv = setInterval(
       () => setElapsed(computeElapsed(sessionStart, totalPausedMs, null)),
       500,
     );
     return () => clearInterval(iv);
-    // Re-run whenever pause state or timing anchors change
   }, [isPaused, pausedAt, sessionStart, totalPausedMs]); // eslint-disable-line
 
   const total = resumeSecs + elapsed;
@@ -349,7 +348,6 @@ export default function FullscreenStopwatch({
   const sessionStart = state.sessionStart ?? Date.now();
   const resumeSecs = state.resumeSecs ?? 0;
 
-  // Restore pause from persisted state
   const initTotalPaused = state.totalPausedMs ?? 0;
   const initPausedAt = state.pausedAt ?? null;
   const initPaused = initPausedAt != null;
@@ -362,6 +360,18 @@ export default function FullscreenStopwatch({
 
   const pausedAt = useRef<number | null>(initPausedAt);
   const totalPaused = useRef(initTotalPaused);
+
+  /* ── Back button → minimise ── */
+  useEffect(() => {
+    window.history.pushState({ fsTimerOpen: true }, "");
+
+    const onPop = () => {
+      onMinimise();
+    };
+
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (paused) return;
@@ -377,31 +387,55 @@ export default function FullscreenStopwatch({
       pausedAt.current = Date.now();
       setPaused(true);
       savePauseState(true, pausedAt.current, totalPaused.current);
+      window.dispatchEvent(
+        new CustomEvent("sv_timer_state_change", {
+          detail: {
+            pausedAt: pausedAt.current,
+            totalPausedMs: totalPaused.current,
+          },
+        }),
+      );
     } else {
       if (pausedAt.current)
         totalPaused.current += Date.now() - pausedAt.current;
       pausedAt.current = null;
       setPaused(false);
       savePauseState(false, null, totalPaused.current);
+      window.dispatchEvent(
+        new CustomEvent("sv_timer_state_change", {
+          detail: { pausedAt: null, totalPausedMs: totalPaused.current },
+        }),
+      );
     }
   }, [paused]);
 
   const handleMinimise = useCallback(() => {
-    // Persist current pause state before hiding
     savePauseState(paused, pausedAt.current, totalPaused.current);
     onMinimise();
   }, [paused, onMinimise]);
 
   const handleDone = useCallback(() => {
+    // Freeze clock at this exact moment
     if (!paused && pausedAt.current == null) pausedAt.current = Date.now();
     if (pausedAt.current) totalPaused.current += Date.now() - pausedAt.current;
-    const finalElapsed = computeElapsed(
+
+    const sessionElapsed = computeElapsed(
       sessionStart,
       totalPaused.current,
       null,
     );
-    onDone(finalElapsed);
-  }, [paused, sessionStart, onDone]);
+
+    // ─── KEY FIX ───────────────────────────────────────────────────────────
+    // Send the FULL total studied time (resumeSecs + this session).
+    // The parent SETS task.studiedSecs to this value directly.
+    // It must NOT add this as a delta — localCheckpoint may have already
+    // baked intermediate time into studiedSecs and the daily total.
+    // Instead the parent should compute:
+    //   dailyIncrement = totalSecs - (fresh studiedSecs from localStorage)
+    // to avoid double-counting.
+    // ───────────────────────────────────────────────────────────────────────
+    onDone(resumeSecs + sessionElapsed);
+  }, [paused, sessionStart, resumeSecs, onDone]);
 
   const totalStudied = resumeSecs + elapsed;
   const assigned = state.initialSecs;
@@ -624,8 +658,8 @@ export default function FullscreenStopwatch({
                   >
                     {fmtSecs(remaining)}
                   </div>
-                  <div style={{ fontSize: 12, color: "#3a3a5e", marginTop: 5 }}>
-                    studied: {fmtSecs(totalStudied)}
+                  <div style={{ fontSize: 12, color: "#dcdce4", marginTop: 5 }}>
+                    Studied: {fmtSecs(totalStudied)}
                   </div>
                 </>
               ) : (

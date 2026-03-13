@@ -1,4 +1,10 @@
 "use client";
+/**
+ * StudyDashboard — Changes:
+ *  • Profile image: uses onError fallback to show initials avatar if image fails to load
+ *  • UnifiedTimerFAB replaces MiniTimerBadge
+ *  • Pomodoro receives taskTimerState + onExpandTaskTimer props for mutual exclusion
+ */
 import { useState, useEffect, useCallback } from "react";
 import { API, authFetch, fmtHrs, lsGet, lsSet, dateKey } from "../lib/utils";
 import { TodoList, StudyData } from "../lib/utils";
@@ -7,17 +13,13 @@ import TodoTab from "./TodoTab";
 import TrackerTab from "./TrackerTab";
 import FullscreenStopwatch, {
   FullscreenTimerState,
-  MiniTimerBadge,
 } from "./FullscreenStopwatch";
 import Leaderboard from "./Leaderboard";
+import FlexScreen from "./flexscreen";
+import PomodoroTimer, { UnifiedTimerFAB } from "./Pomodorotimer";
 
-const TODAY = dateKey(0);
 type Tab = "todo" | "tracker";
 
-/* ── URL hash helpers ────────────────────────────────────────────────────── */
-// Hash format:  #tab/listIdx/taskId
-// e.g.  #todo          → tab=todo, lists overview
-//       #todo/2        → tab=todo, list index 2
 function parseHash(hash: string): { tab: Tab; listIdx: number | null } {
   const parts = hash.replace(/^#/, "").split("/");
   const tab = (
@@ -33,7 +35,66 @@ function buildHash(tab: Tab, listIdx: number | null): string {
   return `#${tab}`;
 }
 
-/* ── Profile modal ───────────────────────────────────────────────────────── */
+/* ── Avatar component with fallback ─────────────────────────────────────── */
+function UserAvatar({
+  user,
+  size = 32,
+  fontSize = 13,
+  border = "2px solid #ede9fe",
+}: {
+  user: any;
+  size?: number;
+  fontSize?: number;
+  border?: string;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+
+  // Reset on user change
+  useEffect(() => {
+    setImgFailed(false);
+  }, [user?.picture]);
+
+  if (user?.picture && !imgFailed) {
+    return (
+      <img
+        src={user.picture}
+        alt=""
+        onError={() => setImgFailed(true)}
+        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          border,
+          objectFit: "cover",
+          display: "block",
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        background: "linear-gradient(135deg,#7c3aed,#8b5cf6)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize,
+        color: "white",
+        fontWeight: 800,
+        border,
+        flexShrink: 0,
+      }}
+    >
+      {user?.displayName?.[0]?.toUpperCase() || "?"}
+    </div>
+  );
+}
+
+/* ── Profile modal ─────────────────────────────────────────────────────── */
 function ProfileModal({
   user,
   todaySecs,
@@ -51,6 +112,9 @@ function ProfileModal({
   onClose: () => void;
   onLogout: () => void;
 }) {
+  const [customGoal, setCustomGoal] = useState("");
+  const [imgFailed, setImgFailed] = useState(false);
+
   return (
     <div
       style={{
@@ -103,10 +167,11 @@ function ProfileModal({
               marginBottom: 16,
             }}
           >
-            {user.picture ? (
+            {user.picture && !imgFailed ? (
               <img
                 src={user.picture}
                 alt=""
+                onError={() => setImgFailed(true)}
                 style={{
                   width: 76,
                   height: 76,
@@ -135,19 +200,6 @@ function ProfileModal({
                 {user.displayName[0]?.toUpperCase()}
               </div>
             )}
-            <div
-              style={{
-                fontSize: 11,
-                color: "#9ca3af",
-                background: "#f9fafb",
-                border: "1px solid #f3f4f6",
-                borderRadius: 99,
-                padding: "4px 12px",
-                marginBottom: 4,
-              }}
-            >
-              name set at signup
-            </div>
           </div>
           <div
             style={{
@@ -215,8 +267,15 @@ function ProfileModal({
             >
               DAILY GOAL
             </div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {[4, 6, 8, 10, 12].map((h) => (
+            <div
+              style={{
+                display: "flex",
+                gap: 6,
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              {[4, 8, 12].map((h) => (
                 <button
                   key={h}
                   onClick={() => onGoalChange(h)}
@@ -229,12 +288,53 @@ function ProfileModal({
                     background: dailyGoalHrs === h ? "#8b5cf6" : "#f3f4f6",
                     border: "none",
                     color: dailyGoalHrs === h ? "white" : "#6b7280",
-                    transition: "all 0.15s",
                   }}
                 >
                   {h}h
                 </button>
               ))}
+              <div style={{ display: "flex" }}>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  placeholder="hrs"
+                  value={customGoal}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "" || (Number(v) >= 1 && Number(v) <= 20))
+                      setCustomGoal(v);
+                  }}
+                  style={{
+                    width: "100%",
+                    padding: "6px 10px",
+                    borderRadius: 99,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    border: "none",
+                    background: "#f3f4f6",
+                    color: "#6b7280",
+                    textAlign: "center",
+                  }}
+                />
+                <button
+                  onClick={() => {
+                    if (customGoal >= 1 && customGoal <= 20)
+                      onGoalChange(Number(customGoal));
+                  }}
+                  style={{
+                    padding: "6px 10px",
+                    borderRadius: 99,
+                    border: "none",
+                    background: "#10b981",
+                    color: "white",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  ✓
+                </button>
+              </div>
             </div>
           </div>
           <button
@@ -280,24 +380,20 @@ function ProfileModal({
 export default function StudyDashboard() {
   const { user, logout } = useAuth();
 
-  // ── Routing state from URL hash ──────────────────────────────────────────
   const [tab, setTabState] = useState<Tab>("todo");
   const [activeListIdx, setActiveListIdx] = useState<number | null>(null);
 
-  // Read initial state from hash on mount
   useEffect(() => {
     const { tab: t, listIdx } = parseHash(window.location.hash);
     setTabState(t);
     setActiveListIdx(listIdx);
   }, []);
 
-  // Listen for browser back/forward
   useEffect(() => {
     const onPop = () => {
       const { tab: t, listIdx } = parseHash(window.location.hash);
       setTabState(t);
       setActiveListIdx(listIdx);
-      // Tell TodoTab to sync its activeIdx
       window.dispatchEvent(
         new CustomEvent("sv_nav", { detail: { tab: t, listIdx } }),
       );
@@ -306,7 +402,6 @@ export default function StudyDashboard() {
     return () => window.removeEventListener("popstate", onPop);
   }, []);
 
-  // Push hash when tab changes
   const setTab = useCallback((t: Tab) => {
     setTabState(t);
     setActiveListIdx(null);
@@ -314,30 +409,103 @@ export default function StudyDashboard() {
     if (window.location.hash !== hash) window.history.pushState(null, "", hash);
   }, []);
 
-  // Push hash when list opens/closes inside TodoTab
   const handleListNav = useCallback((listIdx: number | null) => {
     setActiveListIdx(listIdx);
     const hash = buildHash("todo", listIdx);
     if (window.location.hash !== hash) window.history.pushState(null, "", hash);
   }, []);
 
-  // ── Timer state ──────────────────────────────────────────────────────────
+  /* ── Timer state ── */
   const [fsTimer, setFsTimer] = useState<FullscreenTimerState | null>(null);
   const [fsMinimised, setFsMinimised] = useState(false);
 
-  // ── UI state ─────────────────────────────────────────────────────────────
+  /* ── Pomodoro state (read for UnifiedTimerFAB) ── */
+  const [pomoState, setPomoState] = useState<any>(null);
+  const [pomoCfg, setPomoCfg] = useState<any>({
+    focusMins: 25,
+    shortBreakMins: 5,
+    longBreakMins: 15,
+    longBreakAfter: 4,
+    autoStartBreak: false,
+    autoStartFocus: false,
+    soundEnabled: true,
+  });
+
+  useEffect(() => {
+    const refresh = () => {
+      try {
+        const raw = localStorage.getItem("sv_pomo_timer");
+        setPomoState(raw ? JSON.parse(raw) : null);
+        const cfgRaw = localStorage.getItem("sv_pomo_settings");
+        if (cfgRaw) setPomoCfg(JSON.parse(cfgRaw));
+      } catch {}
+    };
+    refresh();
+    const iv = setInterval(refresh, 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  /* ── UI state ── */
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showFlex, setShowFlex] = useState(false);
   const [dailyGoalHrs, setDailyGoalHrs] = useState(8);
   const [todaySecs, setTodaySecs] = useState(0);
   const [totalSecs, setTotalSecs] = useState(0);
   const [studyData, setStudyData] = useState<StudyData | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
 
-  /* ── Load ── */
+  useEffect(() => {
+    const h = (e: Event) => {
+      const { pausedAt, totalPausedMs } = (e as CustomEvent).detail as {
+        pausedAt: number | null;
+        totalPausedMs: number;
+      };
+      setFsTimer((prev) =>
+        prev
+          ? { ...prev, pausedAt: pausedAt ?? undefined, totalPausedMs }
+          : prev,
+      );
+    };
+    window.addEventListener("sv_timer_state_change", h);
+    return () => window.removeEventListener("sv_timer_state_change", h);
+  }, []);
+
+  useEffect(() => {
+    const onForceLogout = () => {
+      setFsTimer(null);
+      setFsMinimised(false);
+    };
+    window.addEventListener("sv_force_logout", onForceLogout);
+    return () => window.removeEventListener("sv_force_logout", onForceLogout);
+  }, []);
+
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    const bc = new BroadcastChannel("sv_timer_lock");
+    const onTimerStart = () =>
+      bc.postMessage({ type: "timer_started", tabId: _tabId });
+    bc.onmessage = (e) => {
+      if (e.data?.type === "timer_started" && e.data?.tabId !== _tabId) {
+        if (fsTimer) {
+          localStorage.removeItem("sv_running_timer");
+          setFsTimer(null);
+          setFsMinimised(false);
+          window.dispatchEvent(new Event("sv_timer_stopped"));
+        }
+      }
+    };
+    window.addEventListener("sv_timer_broadcast", onTimerStart);
+    return () => {
+      bc.close();
+      window.removeEventListener("sv_timer_broadcast", onTimerStart);
+    };
+  }, [fsTimer]);
+
   useEffect(() => {
     if (!user) return;
     setDataLoading(true);
+    const TODAY = dateKey(0);
     authFetch(`${API}/api/void/study/me`)
       .then((r) => r.json())
       .then((d) => {
@@ -347,7 +515,9 @@ export default function StudyDashboard() {
           const ds = d.data.dailySecs || {};
           Object.entries(ds).forEach(([k, v]) => lsSet("sv_daily_" + k, v));
           if (d.data.todoLists) lsSet("sv_todo_lists", d.data.todoLists);
-          setTodaySecs(ds[TODAY] || 0);
+          setTodaySecs(
+            (ds[TODAY] || 0) + lsGet<number>("sv_pomo_today_" + TODAY, 0),
+          );
           const lifetime = Object.values(ds).reduce(
             (a: number, v) => a + (v as number),
             0,
@@ -357,37 +527,58 @@ export default function StudyDashboard() {
           setTodaySecs(lsGet<number>("sv_daily_" + TODAY, 0));
         }
       })
-      .catch(() => setTodaySecs(lsGet<number>("sv_daily_" + TODAY, 0)))
+      .catch(() => setTodaySecs(lsGet<number>("sv_daily_" + dateKey(0), 0)))
       .finally(() => setDataLoading(false));
   }, [user?.uid]); // eslint-disable-line
 
+  const computeLifetime = () => {
+    let sum = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      if (k.startsWith("sv_daily_") || k.startsWith("sv_pomo_today_")) {
+        try {
+          sum += Number(localStorage.getItem(k)) || 0;
+        } catch {}
+      }
+    }
+    return sum;
+  };
+
   useEffect(() => {
-    const h = () => setTodaySecs(lsGet<number>("sv_daily_" + TODAY, 0));
+    const h = () => {
+      const TODAY = dateKey(0);
+      setTodaySecs(
+        lsGet<number>("sv_daily_" + TODAY, 0) +
+          lsGet<number>("sv_pomo_today_" + TODAY, 0),
+      );
+      setTotalSecs(computeLifetime());
+    };
     window.addEventListener("sv_update", h);
     return () => window.removeEventListener("sv_update", h);
   }, []);
 
-  /* ── Study time helpers ── */
   const addStudyTime = useCallback((secs: number) => {
-    if (secs <= 0) return;
+    if (secs <= 1 || secs > 43200) return;
+    const TODAY = dateKey(0);
     const next = lsGet<number>("sv_daily_" + TODAY, 0) + secs;
     lsSet("sv_daily_" + TODAY, next);
-    setTodaySecs(next);
-    setTotalSecs((t) => t + secs);
+    setTodaySecs(next + lsGet<number>("sv_pomo_today_" + TODAY, 0));
+    setTotalSecs(computeLifetime());
     authFetch(`${API}/api/void/study/sync`, {
       method: "POST",
       body: JSON.stringify({ dailySecsIncrement: { date: TODAY, secs } }),
     }).catch(() => {});
     window.dispatchEvent(new Event("sv_update"));
-  }, []);
+  }, []); // eslint-disable-line
 
   const removeStudyTime = useCallback((secs: number) => {
     if (secs <= 0) return;
-    const cur = lsGet<number>("sv_daily_" + TODAY, 0);
-    const next = Math.max(0, cur - secs);
+    const TODAY = dateKey(0);
+    const next = Math.max(0, lsGet<number>("sv_daily_" + TODAY, 0) - secs);
     lsSet("sv_daily_" + TODAY, next);
     setTodaySecs(next);
-    setTotalSecs((t) => Math.max(0, t - secs));
+    setTotalSecs(computeLifetime());
     authFetch(`${API}/api/void/study/sync`, {
       method: "POST",
       body: JSON.stringify({
@@ -395,7 +586,7 @@ export default function StudyDashboard() {
       }),
     }).catch(() => {});
     window.dispatchEvent(new Event("sv_update"));
-  }, []);
+  }, []); // eslint-disable-line
 
   const saveGoal = (hrs: number) => {
     setDailyGoalHrs(hrs);
@@ -408,8 +599,6 @@ export default function StudyDashboard() {
 
   /* ── Fullscreen callbacks ── */
   const handleFsMinimise = useCallback(() => {
-    // Re-read persisted timer AFTER FullscreenStopwatch wrote pauseState to localStorage
-    // so MiniTimerBadge receives the current pausedAt / totalPausedMs
     try {
       const raw = localStorage.getItem("sv_running_timer");
       if (raw) {
@@ -427,84 +616,50 @@ export default function StudyDashboard() {
     } catch {}
     setFsMinimised(true);
   }, []);
+
   const handleFsExpand = useCallback(() => setFsMinimised(false), []);
 
   const handleFsDone = useCallback(
-    (elapsedThisSession: number) => {
+    (totalSecs: number) => {
       if (!fsTimer) return;
-      const lists = lsGet<TodoList[]>("sv_todo_lists", []);
-      const timer = (() => {
-        try {
-          const r = localStorage.getItem("sv_running_timer");
-          return r ? JSON.parse(r) : null;
-        } catch {
-          return null;
-        }
-      })();
-      const savedSecs = timer?.savedSecs ?? 0;
-      const newTotal = savedSecs + elapsedThisSession;
-      const updated = lists.map((l, li) =>
-        li === fsTimer.listIdx
-          ? {
-              ...l,
-              items: l.items.map((t) =>
-                t.id === fsTimer.taskId ? { ...t, studiedSecs: newTotal } : t,
-              ),
-            }
-          : l,
+      if (totalSecs < 2) {
+        localStorage.removeItem("sv_running_timer");
+        localStorage.removeItem("sv_autosave");
+        setFsTimer(null);
+        setFsMinimised(false);
+        window.dispatchEvent(new Event("sv_timer_stopped"));
+        return;
+      }
+      window.dispatchEvent(
+        new CustomEvent("sv_timer_done", {
+          detail: {
+            taskId: fsTimer.taskId,
+            listIdx: fsTimer.listIdx,
+            totalSecs,
+          },
+        }),
       );
-      lsSet("sv_todo_lists", updated);
-      localStorage.removeItem("sv_running_timer");
-      if (elapsedThisSession > 0) addStudyTime(elapsedThisSession);
-      authFetch(`${API}/api/void/study/sync`, {
-        method: "POST",
-        body: JSON.stringify({ todoLists: updated }),
-      }).catch(() => {});
       setFsTimer(null);
       setFsMinimised(false);
-      window.dispatchEvent(new Event("sv_update"));
-      window.dispatchEvent(new Event("sv_timer_stopped"));
     },
-    [fsTimer, addStudyTime],
+    [fsTimer],
   );
 
   const handleFsDiscard = useCallback(() => {
     localStorage.removeItem("sv_running_timer");
+    localStorage.removeItem("sv_autosave");
     setFsTimer(null);
     setFsMinimised(false);
     window.dispatchEvent(new Event("sv_timer_stopped"));
   }, []);
 
-  // Reset: wipe all studiedSecs for the task + deduct TOTAL time from all counters
   const handleFsReset = useCallback(() => {
     if (!fsTimer) return;
     const lists = lsGet<TodoList[]>("sv_todo_lists", []);
     const task = lists[fsTimer.listIdx]?.items.find(
       (t) => t.id === fsTimer.taskId,
     );
-    // Include any unsaved live session time from persisted timer
-    const timerRaw = (() => {
-      try {
-        const r = localStorage.getItem("sv_running_timer");
-        return r ? JSON.parse(r) : null;
-      } catch {
-        return null;
-      }
-    })();
-    const savedSecs = timerRaw?.savedSecs ?? task?.studiedSecs ?? 0;
-    const sessionStart = timerRaw?.sessionStart ?? Date.now();
-    const totalPausedMs = timerRaw?.totalPausedMs ?? 0;
-    const pausedAt = timerRaw?.pausedAt ?? null;
-    const pauseOffset = pausedAt ? Date.now() - pausedAt : 0;
-    const liveSession = Math.max(
-      0,
-      Math.floor(
-        (Date.now() - sessionStart - totalPausedMs - pauseOffset) / 1000,
-      ),
-    );
-    // Total time that was ever attributed to this task (saved + current live session)
-    const totalForTask = savedSecs + liveSession;
-
+    const totalForTask = task?.studiedSecs ?? 0;
     const updated = lists.map((l, li) =>
       li === fsTimer.listIdx
         ? {
@@ -517,7 +672,7 @@ export default function StudyDashboard() {
     );
     lsSet("sv_todo_lists", updated);
     localStorage.removeItem("sv_running_timer");
-    // Deduct all time from today + lifetime counters
+    localStorage.removeItem("sv_autosave");
     if (totalForTask > 0) removeStudyTime(totalForTask);
     authFetch(`${API}/api/void/study/sync`, {
       method: "POST",
@@ -548,7 +703,7 @@ export default function StudyDashboard() {
     >
       <style>{CSS}</style>
 
-      {/* Fullscreen overlay */}
+      {/* Fullscreen task timer */}
       {fsTimer && !fsMinimised && (
         <FullscreenStopwatch
           state={fsTimer}
@@ -559,13 +714,31 @@ export default function StudyDashboard() {
         />
       )}
 
-      {/* Mini badge when minimised */}
-      {fsTimer && fsMinimised && (
-        <MiniTimerBadge state={fsTimer} onExpand={handleFsExpand} />
+      {/* ── UNIFIED FAB ── */}
+      {(fsMinimised || (!fsTimer && pomoState)) && (
+        <UnifiedTimerFAB
+          pomoState={pomoState}
+          pomoCfg={pomoCfg}
+          onOpenPomo={() => {
+            window.dispatchEvent(new Event("sv_pomo_open"));
+          }}
+          taskTimer={fsMinimised ? fsTimer : null}
+          onOpenTask={handleFsExpand}
+        />
       )}
 
       {showLeaderboard && (
         <Leaderboard onClose={() => setShowLeaderboard(false)} />
+      )}
+
+      {showFlex && user && (
+        <FlexScreen
+          todaySecs={todaySecs}
+          totalSecs={computeLifetime()}
+          dailyGoalHrs={dailyGoalHrs}
+          user={user}
+          onClose={() => setShowFlex(false)}
+        />
       )}
 
       {showProfile && user && (
@@ -693,7 +866,39 @@ export default function StudyDashboard() {
 
           <div style={{ flex: 1 }} />
 
-          {/* Target pill */}
+          {/* Flex button */}
+          <button
+            onClick={() => setShowFlex(true)}
+            title="Flex your study session"
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 10,
+              background: "linear-gradient(135deg,#7c3aed18,#a78bfa18)",
+              border: "1.5px solid rgba(139,92,246,0.25)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              fontSize: 16,
+              transition: "all 0.18s",
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background =
+                "rgba(139,92,246,0.18)";
+              (e.currentTarget as HTMLElement).style.transform = "scale(1.08)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background =
+                "linear-gradient(135deg,#7c3aed18,#a78bfa18)";
+              (e.currentTarget as HTMLElement).style.transform = "scale(1)";
+            }}
+          >
+            ⚡
+          </button>
+
+          {/* Today time pill */}
           <div
             style={{
               display: "flex",
@@ -718,16 +923,19 @@ export default function StudyDashboard() {
             <span style={{ fontSize: 12, fontWeight: 800, color: "#7c3aed" }}>
               {fmtHrs(todaySecs)}
             </span>
+            <span style={{ fontSize: 11, color: "#9ca3af" }}>
+              / {dailyGoalHrs}h
+            </span>
             <span
               className="sv-hide-xs"
               style={{ fontSize: 11, color: "#9ca3af" }}
             >
-              / {dailyGoalHrs}h target
+              target
             </span>
           </div>
 
-          <button
-            onClick={() => setShowLeaderboard(true)}
+          <a
+            href="/community?view=communities"
             style={{
               display: "flex",
               alignItems: "center",
@@ -742,14 +950,8 @@ export default function StudyDashboard() {
               cursor: "pointer",
             }}
           >
-            🏆
-            <span
-              className="sv-hide-xs"
-              style={{ marginLeft: 2, color: "#92400e" }}
-            >
-              Board
-            </span>
-          </button>
+            <span style={{ marginLeft: 2, color: "#92400e" }}>Groups</span>
+          </a>
 
           {user && (
             <button
@@ -764,37 +966,12 @@ export default function StudyDashboard() {
                 flexShrink: 0,
               }}
             >
-              {user.picture ? (
-                <img
-                  src={user.picture}
-                  alt=""
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: "50%",
-                    border: "2px solid #ede9fe",
-                    objectFit: "cover",
-                    display: "block",
-                  }}
-                />
-              ) : (
-                <div
-                  style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: "50%",
-                    background: "linear-gradient(135deg,#7c3aed,#8b5cf6)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 13,
-                    color: "white",
-                    fontWeight: 800,
-                  }}
-                >
-                  {user.displayName[0]?.toUpperCase()}
-                </div>
-              )}
+              <UserAvatar
+                user={user}
+                size={32}
+                fontSize={13}
+                border="2px solid #ede9fe"
+              />
             </button>
           )}
         </div>
@@ -835,6 +1012,7 @@ export default function StudyDashboard() {
                 onStartFullscreen={(state) => {
                   setFsTimer(state);
                   setFsMinimised(false);
+                  window.dispatchEvent(new Event("sv_timer_broadcast"));
                 }}
                 onStudyTime={addStudyTime}
                 onRemoveStudyTime={removeStudyTime}
@@ -846,12 +1024,19 @@ export default function StudyDashboard() {
             {tab === "tracker" && (
               <TrackerTab
                 onStudyTime={addStudyTime}
-                initialTopics={studyData?.topics?.[TODAY]}
+                initialTopics={studyData?.topics?.[dateKey(0)]}
               />
             )}
           </>
         )}
       </main>
+
+      {/* Pomodoro Timer */}
+      <PomodoroTimer
+        onStudyTime={addStudyTime}
+        taskTimerState={fsTimer}
+        onExpandTaskTimer={handleFsExpand}
+      />
 
       {/* Mobile bottom nav */}
       <nav className="sv-bottom-nav">
@@ -896,6 +1081,7 @@ export default function StudyDashboard() {
               )}
             </button>
           ))}
+
           <button
             onClick={() => setShowProfile(true)}
             style={{
@@ -911,36 +1097,12 @@ export default function StudyDashboard() {
               color: "#9ca3af",
             }}
           >
-            {user?.picture ? (
-              <img
-                src={user.picture}
-                alt=""
-                style={{
-                  width: 24,
-                  height: 24,
-                  borderRadius: "50%",
-                  objectFit: "cover",
-                  border: "1.5px solid #ede9fe",
-                }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: 24,
-                  height: 24,
-                  borderRadius: "50%",
-                  background: "linear-gradient(135deg,#7c3aed,#8b5cf6)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 11,
-                  color: "white",
-                  fontWeight: 800,
-                }}
-              >
-                {user?.displayName?.[0]?.toUpperCase() || "?"}
-              </div>
-            )}
+            <UserAvatar
+              user={user}
+              size={24}
+              fontSize={11}
+              border="1.5px solid #ede9fe"
+            />
             <span style={{ fontSize: 10, fontWeight: 700 }}>Profile</span>
           </button>
         </div>
@@ -948,6 +1110,8 @@ export default function StudyDashboard() {
     </div>
   );
 }
+
+const _tabId = Math.random().toString(36).slice(2);
 
 const CSS = `
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;600;700&display=swap');

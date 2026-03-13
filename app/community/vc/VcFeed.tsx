@@ -20,6 +20,7 @@ import {
   ago,
 } from "./vcAtoms";
 import LoginGate from "../components/loginGate";
+import { ComposeForm } from "../vc/addpost/page";
 
 const PRESET_CATS = [
   "general",
@@ -50,6 +51,7 @@ interface Post {
   communityName?: string;
   communityEmoji?: string;
   communityColor?: string;
+  image?: string | null;
 }
 
 interface Props {
@@ -60,7 +62,7 @@ interface Props {
 export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
   const { bid, isLoggedIn, joinedCommunities } = useIdentity();
   const [tab, setTab] = useState<"hot" | "new" | "unsolved">("hot");
-  const [allPosts, setAllPosts] = useState<Post[]>([]); // accumulated pages
+  const [allPosts, setAllPosts] = useState<Post[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -71,8 +73,8 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
   const [catFilter, setCat] = useState("all");
   const [allCats, setAllCats] = useState<string[]>(PRESET_CATS);
   const toast = useToast();
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
-  // ── Fetch one page ────────────────────────────────────────────────────────
   const fetchPage = useCallback(
     async (pg: number, reset: boolean) => {
       reset ? setLoading(true) : setLoadingMore(true);
@@ -95,12 +97,10 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
     [tab, bid],
   );
 
-  // Reset when tab or user changes
   useEffect(() => {
     fetchPage(1, true);
   }, [tab, bid]); // eslint-disable-line
 
-  // Load categories
   useEffect(() => {
     fetch(`${API}/api/void/categories`)
       .then((r) => r.json())
@@ -113,14 +113,12 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
       .catch(() => {});
   }, []);
 
-  // ── Filter posts for display ───────────────────────────────────────────────
   const filtered = useMemo(
     () =>
       allPosts.filter((p) => {
-        // Community posts gated by login + membership
         if (p.community) {
           if (!isLoggedIn) return false;
-          if (!joinedCommunities.includes(p.community)) return false;
+          if (!p.isPrivate && !joinedCommunities.includes(p.community)) return false;
         }
         if (catFilter !== "all" && p.category !== catFilter) return false;
         const q = search.toLowerCase().trim();
@@ -136,7 +134,6 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
 
   const hasMore = allPosts.length < total;
 
-  // ── Actions ───────────────────────────────────────────────────────────────
   async function vote(slug: string) {
     try {
       const r = await fetch(`${API}/api/void/posts/${slug}/vote`, {
@@ -160,7 +157,6 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
   }
 
   async function del(slug: string) {
-    if (!confirm("Delete this post?")) return;
     try {
       const r = await fetch(`${API}/api/void/posts/${slug}`, {
         method: "DELETE",
@@ -170,15 +166,27 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
       if (r.ok) {
         setAllPosts((p) => p.filter((x) => x.slug !== slug));
         setTotal((n) => n - 1);
-        toast.show("Deleted");
+        toast.show("Deleted ✓");
       } else toast.show("Could not delete", true);
     } catch {
       toast.show("Error", true);
+    } finally {
+      setDeleteTarget(null);
     }
   }
 
   return (
-    <div>
+    <div style={{ padding: "0", maxWidth: 700, margin: "0 auto" }}>
+      <style>{`
+        @keyframes vcSpin { to { transform: rotate(360deg); } }
+        @keyframes vcFadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+        .vc-post-card { transition: border-color 0.15s, box-shadow 0.18s, transform 0.18s; }
+        .vc-post-card:hover { border-color: #673de6 !important; box-shadow: 0 6px 28px #673de622 !important; transform: translateY(-2px); }
+        .vc-post-img { overflow:hidden; }
+        .vc-post-img img { transition: transform 0.5s cubic-bezier(.25,.46,.45,.94); display:block; }
+        .vc-post-card:hover .vc-post-img img { transform: scale(1.05); }
+      `}</style>
+
       {loginGate && (
         <LoginGate
           reason="Sign in to post"
@@ -190,7 +198,166 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
         />
       )}
 
-      {/* Guest banner */}
+      {/* ── Delete confirmation popup ── */}
+      {deleteTarget && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+          onClick={() => setDeleteTarget(null)}
+        >
+          {/* Backdrop */}
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(10,8,30,0.45)",
+              backdropFilter: "blur(6px)",
+              WebkitBackdropFilter: "blur(6px)",
+            }}
+          />
+          {/* Dialog */}
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative",
+              background: "white",
+              borderRadius: 22,
+              width: "min(400px,90vw)",
+              overflow: "hidden",
+              boxShadow:
+                "0 24px 80px rgba(103,61,230,0.18), 0 4px 20px rgba(0,0,0,0.12)",
+              animation: "vcFadeUp 0.2s ease both",
+            }}
+          >
+            {/* Red top accent */}
+            <div
+              style={{
+                height: 4,
+                background: "linear-gradient(90deg,#dc2626,#ef4444)",
+              }}
+            />
+            <div style={{ padding: "28px 28px 24px" }}>
+              {/* Icon */}
+              <div
+                style={{
+                  width: 52,
+                  height: 52,
+                  borderRadius: 16,
+                  background: "#fee2e2",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginBottom: 16,
+                }}
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"
+                    stroke="#dc2626"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M10 11v6M14 11v6"
+                    stroke="#dc2626"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </div>
+              <div
+                style={{
+                  fontSize: 17,
+                  fontWeight: 900,
+                  color: "#1a1a2e",
+                  marginBottom: 8,
+                }}
+              >
+                Delete this post?
+              </div>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "#6b6b8a",
+                  lineHeight: 1.6,
+                  marginBottom: 24,
+                }}
+              >
+                This action is permanent. The post and all its replies will be
+                removed and cannot be recovered.
+              </div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  onClick={() => setDeleteTarget(null)}
+                  style={{
+                    flex: 1,
+                    padding: "11px 0",
+                    borderRadius: 13,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    background: "#f4f4f8",
+                    border: "1.5px solid #e2e2ef",
+                    color: "#6b6b8a",
+                    cursor: "pointer",
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.borderColor =
+                      "#673de6";
+                    (e.currentTarget as HTMLElement).style.color = "#673de6";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.borderColor =
+                      "#e2e2ef";
+                    (e.currentTarget as HTMLElement).style.color = "#6b6b8a";
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => del(deleteTarget)}
+                  style={{
+                    flex: 1,
+                    padding: "11px 0",
+                    borderRadius: 13,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    background: "linear-gradient(135deg,#dc2626,#ef4444)",
+                    border: "none",
+                    color: "white",
+                    cursor: "pointer",
+                    boxShadow: "0 4px 14px #dc262630",
+                    transition: "all 0.15s",
+                  }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.transform =
+                      "scale(1.02)";
+                    (e.currentTarget as HTMLElement).style.boxShadow =
+                      "0 6px 20px #dc262645";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.transform =
+                      "scale(1)";
+                    (e.currentTarget as HTMLElement).style.boxShadow =
+                      "0 4px 14px #dc262630";
+                  }}
+                >
+                  Yes, delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {!isLoggedIn && (
         <div
           style={{
@@ -228,61 +395,20 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
         </div>
       )}
 
-      {/* Search + compose */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <div style={{ position: "relative", flex: 1 }}>
-          <svg
-            style={{
-              position: "absolute",
-              left: 12,
-              top: "50%",
-              transform: "translateY(-50%)",
-              color: "#a0a0bc",
-              pointerEvents: "none",
-            }}
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="none"
-          >
-            <circle
-              cx="6"
-              cy="6"
-              r="4.5"
-              stroke="currentColor"
-              strokeWidth="1.4"
-            />
-            <path
-              d="M9.5 9.5L12.5 12.5"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              strokeLinecap="round"
-            />
-          </svg>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search posts…"
-            style={{
-              width: "100%",
-              borderRadius: 14,
-              padding: "10px 16px 10px 36px",
-              fontSize: 13,
-              outline: "none",
-              background: "white",
-              border: "1.5px solid #e2e2ef",
-              color: "#1a1a2e",
-              transition: "border-color 0.2s",
-            }}
-            onFocus={(e) => (e.target.style.borderColor = "#673de6")}
-            onBlur={(e) => (e.target.style.borderColor = "#e2e2ef")}
-          />
-        </div>
-        <button
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 14,
+          flexWrap: "wrap",
+        }}
+      >
+        <span
           onClick={() => (isLoggedIn ? setCompose(true) : setLoginGate(true))}
           style={{
-            width: 44,
-            height: 44,
+            width: 40,
+            height: "inherit",
             borderRadius: 14,
             background: "linear-gradient(135deg,#673de6,#4f46e5)",
             border: "none",
@@ -297,19 +423,7 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
           }}
         >
           +
-        </button>
-      </div>
-
-      {/* Tabs + category filter */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          marginBottom: 14,
-          flexWrap: "wrap",
-        }}
-      >
+        </span>
         <div
           style={{
             display: "flex",
@@ -367,7 +481,6 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
         </span>
       </div>
 
-      {/* Compose modal */}
       {compose && (
         <Modal onClose={() => setCompose(false)}>
           <ComposeForm
@@ -383,7 +496,6 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
         </Modal>
       )}
 
-      {/* Post list */}
       {loading ? (
         [0, 1, 2, 3].map((i) => <SkelCard key={i} />)
       ) : filtered.length === 0 ? (
@@ -407,7 +519,7 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
             isOwner={p.browserId === bid}
             onOpen={() => onOpen(p.slug)}
             onVote={() => vote(p.slug)}
-            onDelete={() => del(p.slug)}
+            onDelete={() => setDeleteTarget(p.slug)}
             onShare={() =>
               navigator.clipboard
                 .writeText(`${window.location.origin}/community?post=${p.slug}`)
@@ -418,7 +530,6 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
         ))
       )}
 
-      {/* ── Pagination: Load more ── */}
       {!loading && hasMore && (
         <div style={{ textAlign: "center", marginTop: 20, marginBottom: 8 }}>
           <button
@@ -472,7 +583,6 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
         </div>
       )}
 
-      {/* End of feed indicator */}
       {!loading && !hasMore && allPosts.length > 0 && (
         <div
           style={{
@@ -487,7 +597,6 @@ export default function VcFeed({ onOpen, onOpenCommunity }: Props) {
       )}
 
       {toast.on && <Toast msg={toast.msg} err={toast.err} />}
-      <style>{`@keyframes vcSpin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
@@ -513,30 +622,87 @@ export function PostCard({
   onOpenCommunity: (s: string) => void;
 }) {
   const [menu, setMenu] = useState(false);
+  const [imgErr, setImgErr] = useState(false);
+  const hasImage = !!post.image && !imgErr;
+
+  // Use the image URL directly — no transformation to avoid breaking the URL
+  const thumbUrl = post.image || null;
+
   return (
     <div
+      className="vc-post-card"
       onClick={onOpen}
       style={{
         background: "white",
         border: "1px solid #e2e2ef",
         borderRadius: 18,
-        marginBottom: 8,
+        marginBottom: 10,
         cursor: "pointer",
-        boxShadow: "0 1px 4px #00000006",
-        animation: `vcFadeUp 0.3s ease ${delay}s both`,
-        transition: "border-color 0.15s, box-shadow 0.15s",
-      }}
-      onMouseEnter={(e) => {
-        (e.currentTarget as HTMLElement).style.borderColor = "#673de6";
-        (e.currentTarget as HTMLElement).style.boxShadow =
-          "0 0 0 2px #673de615";
-      }}
-      onMouseLeave={(e) => {
-        (e.currentTarget as HTMLElement).style.borderColor = "#e2e2ef";
-        (e.currentTarget as HTMLElement).style.boxShadow = "";
+        boxShadow: "0 1px 4px #00000008",
+        animation: `vcFadeUp 0.32s ease ${delay}s both`,
+        overflow: "hidden",
       }}
     >
-      <div style={{ padding: "14px 16px 0" }}>
+      {/* ── Hero image — full natural height, no crop ── */}
+      {hasImage && thumbUrl && (
+        <div
+          className="vc-post-img"
+          style={{ position: "relative", width: "100%", background: "#0d0d14" }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={thumbUrl!}
+            alt={post.title}
+            loading="lazy"
+            onError={() => setImgErr(true)}
+            style={{
+              width: "100%",
+              height: "auto",
+              maxHeight: 600,
+              objectFit: "contain",
+              display: "block",
+            }}
+          />
+
+          {/* Subtle bottom gradient for badge readability */}
+          <div
+            style={{
+              position: "absolute",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: 56,
+              background:
+                "linear-gradient(to bottom, transparent, rgba(10,8,30,0.55))",
+              pointerEvents: "none",
+            }}
+          />
+
+          {/* Category pill — bottom left */}
+          <span
+            style={{
+              position: "absolute",
+              bottom: 10,
+              left: 12,
+              fontSize: 10,
+              fontWeight: 800,
+              padding: "3px 10px",
+              borderRadius: 99,
+              background: "#673de6",
+              color: "white",
+              textTransform: "uppercase",
+              letterSpacing: "0.07em",
+              boxShadow: "0 2px 10px #673de650",
+            }}
+          >
+            {post.category}
+          </span>
+        </div>
+      )}
+
+      {/* ── Card body ── */}
+      <div style={{ padding: hasImage ? "12px 16px 0" : "14px 16px 0" }}>
+        {/* Author row */}
         <div
           style={{
             display: "flex",
@@ -594,19 +760,22 @@ export function PostCard({
               flexShrink: 0,
             }}
           >
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 800,
-                padding: "2px 8px",
-                borderRadius: 99,
-                background: "#ebe8fc",
-                color: "#673de6",
-                textTransform: "uppercase",
-              }}
-            >
-              {post.category}
-            </span>
+            {/* Category badge only shown here when no image (otherwise overlaid on image) */}
+            {!hasImage && (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 800,
+                  padding: "2px 8px",
+                  borderRadius: 99,
+                  background: "#ebe8fc",
+                  color: "#673de6",
+                  textTransform: "uppercase",
+                }}
+              >
+                {post.category}
+              </span>
+            )}
             {isOwner && (
               <div
                 style={{ position: "relative" }}
@@ -693,6 +862,8 @@ export function PostCard({
             )}
           </div>
         </div>
+
+        {/* Title */}
         <div
           style={{
             fontSize: 15,
@@ -704,6 +875,8 @@ export function PostCard({
         >
           {post.title}
         </div>
+
+        {/* Body — 1 line if image dominates, 2 lines otherwise */}
         {post.body && (
           <p
             style={{
@@ -713,13 +886,15 @@ export function PostCard({
               marginBottom: 8,
               overflow: "hidden",
               display: "-webkit-box",
-              WebkitLineClamp: 2,
+              WebkitLineClamp: hasImage ? 1 : 2,
               WebkitBoxOrient: "vertical" as any,
             }}
           >
             {post.body}
           </p>
         )}
+
+        {/* Tags */}
         {post.tags.length > 0 && (
           <div
             style={{
@@ -735,16 +910,17 @@ export function PostCard({
           </div>
         )}
       </div>
+
+      {/* ── Action bar ── */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
           gap: 2,
           padding: "8px 12px",
-          borderTop: "1px solid #e2e2ef",
+          borderTop: "1px solid #f0f0f8",
           marginTop: 10,
-          borderRadius: "0 0 18px 18px",
-          background: "#f4f4f8",
+          background: "#fafafe",
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -756,247 +932,6 @@ export function PostCard({
           label={`${post.replyCount}`}
         />
         <ActBtn onClick={onShare} small icon={<ShareIco />} label="Share" />
-      </div>
-    </div>
-  );
-}
-
-// ── ComposeForm ───────────────────────────────────────────────────────────────
-export function ComposeForm({
-  onCancel,
-  onSuccess,
-  toast,
-  community,
-}: {
-  onCancel: () => void;
-  onSuccess: (p: any) => void;
-  toast: (m: string, e?: boolean) => void;
-  community?: string;
-}) {
-  const { bid, myName } = useIdentity();
-  const [title, setTitle] = useState("");
-  const [body, setBody] = useState("");
-  const [cat, setCat] = useState("general");
-  const [tags, setTags] = useState("");
-  const [busy, setBusy] = useState(false);
-  const inp = {
-    background: "#f4f4f8",
-    border: "1.5px solid #e2e2ef",
-    borderRadius: 14,
-    padding: "10px 14px",
-    fontSize: 13,
-    outline: "none",
-    color: "#1a1a2e",
-    width: "100%",
-    transition: "border-color 0.2s",
-  };
-  async function submit() {
-    if (!title.trim()) {
-      toast("Title required", true);
-      return;
-    }
-    setBusy(true);
-    try {
-      const r = await fetch(`${API}/api/void/posts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title,
-          body,
-          category: cat,
-          tags: tags
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean),
-          browserId: bid,
-          anonName: myName,
-          community: community || null,
-        }),
-      });
-      const d = await r.json();
-      if (d.success) {
-        const pr = await fetch(
-          `${API}/api/void/posts/${d.slug}?browserId=${encodeURIComponent(bid)}`,
-        );
-        const pd = await pr.json();
-        if (pd.post) onSuccess(pd.post);
-      } else toast(d.error || "Failed", true);
-    } catch {
-      toast("Network error", true);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div
-      style={{
-        background: "white",
-        borderRadius: 20,
-        width: "min(560px, 95vw)",
-        border: "1px solid #e2e2ef",
-        overflow: "hidden",
-        boxShadow: "0 20px 60px #00000020",
-      }}
-    >
-      <div
-        style={{
-          padding: "16px 20px",
-          borderBottom: "1px solid #e2e2ef",
-          background: "#f4f4f8",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <div>
-          <div style={{ fontWeight: 900, color: "#1a1a2e", fontSize: 15 }}>
-            Create Post
-          </div>
-          <div style={{ fontSize: 11, color: "#a0a0bc", marginTop: 2 }}>
-            As <strong style={{ color: "#673de6" }}>{myName}</strong>
-          </div>
-        </div>
-        <button
-          onClick={onCancel}
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: "50%",
-            background: "none",
-            border: "none",
-            color: "#a0a0bc",
-            fontSize: 20,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          ×
-        </button>
-      </div>
-      <div
-        style={{
-          padding: 20,
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          autoFocus
-          maxLength={120}
-          placeholder="Title"
-          style={{ ...inp, fontWeight: 700, fontSize: 15 }}
-          onFocus={(e) => (e.target.style.borderColor = "#673de6")}
-          onBlur={(e) => (e.target.style.borderColor = "#e2e2ef")}
-        />
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={3}
-          placeholder="Details (optional)"
-          style={{
-            ...inp,
-            resize: "vertical" as any,
-            display: "block",
-            minHeight: 72,
-          }}
-          onFocus={(e) => (e.target.style.borderColor = "#673de6")}
-          onBlur={(e) => (e.target.style.borderColor = "#e2e2ef")}
-        />
-        <div
-          style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}
-        >
-          <div>
-            <div
-              style={{
-                fontSize: 10,
-                fontWeight: 800,
-                color: "#a0a0bc",
-                letterSpacing: "0.1em",
-                marginBottom: 6,
-              }}
-            >
-              CATEGORY
-            </div>
-            <select
-              value={cat}
-              onChange={(e) => setCat(e.target.value)}
-              style={{ ...inp, cursor: "pointer" }}
-            >
-              {[
-                "general",
-                "upsc",
-                "ssc",
-                "gate",
-                "banking",
-                "state-psc",
-                "railways",
-                "defence",
-              ].map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <div
-              style={{
-                fontSize: 10,
-                fontWeight: 800,
-                color: "#a0a0bc",
-                letterSpacing: "0.1em",
-                marginBottom: 6,
-              }}
-            >
-              TAGS
-            </div>
-            <input
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="tips, notes, …"
-              style={inp}
-              onFocus={(e) => (e.target.style.borderColor = "#673de6")}
-              onBlur={(e) => (e.target.style.borderColor = "#e2e2ef")}
-            />
-          </div>
-        </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <button
-            onClick={onCancel}
-            style={{
-              border: "1px solid #e2e2ef",
-              padding: "9px 20px",
-              borderRadius: 12,
-              fontSize: 13,
-              color: "#6b6b8a",
-              background: "none",
-              cursor: "pointer",
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={submit}
-            disabled={busy}
-            style={{
-              padding: "9px 24px",
-              borderRadius: 12,
-              fontSize: 13,
-              fontWeight: 700,
-              color: "white",
-              background: busy ? "#c4c4d8" : "#673de6",
-              border: "none",
-              cursor: busy ? "not-allowed" : "pointer",
-            }}
-          >
-            {busy ? "Posting…" : "Post"}
-          </button>
-        </div>
       </div>
     </div>
   );
